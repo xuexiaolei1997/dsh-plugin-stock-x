@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>DeepSeek Harness (dsh) 宿主页面模拟测试</title>
+  <style>
+    body {
+      margin: 0;
+      padding: 0;
+      background-color: #0f172a;
+      color: #f8fafc;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+    }
+    .container {
+      max-width: 800px;
+      padding: 40px 20px;
+      background: rgba(30, 41, 59, 0.7);
+      border: 1px solid rgba(51, 65, 85, 0.8);
+      border-radius: 24px;
+      box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+      backdrop-filter: blur(12px);
+    }
+    h1 {
+      font-size: 2.2rem;
+      margin-bottom: 12px;
+      background: linear-gradient(135deg, #60a5fa, #a855f7);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+    p {
+      color: #94a3b8;
+      line-height: 1.6;
+      font-size: 1.05rem;
+    }
+    .badge {
+      display: inline-block;
+      padding: 6px 16px;
+      border-radius: 9999px;
+      background: rgba(59, 130, 246, 0.15);
+      color: #60a5fa;
+      border: 1px solid rgba(59, 130, 246, 0.3);
+      font-size: 0.85rem;
+      font-weight: 600;
+      margin-bottom: 20px;
+    }
+    .tip {
+      margin-top: 30px;
+      padding: 16px 20px;
+      border-radius: 16px;
+      background: rgba(15, 23, 42, 0.8);
+      border: 1px dashed #3b82f6;
+      font-size: 0.95rem;
+      color: #38bdf8;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="badge">🤖 DeepSeek Harness (dsh) 页面宿主模拟</div>
+    <h1>DeepSeek Harness 智能工作台</h1>
+    <p>
+      这是模拟你的主程序（如 DeepSeek Harness、本地前端或任何网页）的页面。<br>
+      右下角已经自动加载了我们的 <b>📈 STOCK 悬浮球插件</b>！
+    </p>
+
+    <div class="tip">
+      👉 <b>请看屏幕右下角：</b><br>
+      1. 点击右下角发光的 <b>【📈 STOCK 悬浮球】</b>（也可以随意按住拖拽）；<br>
+      2. 弹出的面板即为全功能的自选股盯盘工作台；<br>
+      3. 点击任意个股即可呼出<b>完整复刻的专业金融 K 线图表（全周期 + MA/BOLL/EMA/VOL/MACD/RSI/KDJ 指标）</b>！
+    </div>
+  </div>
+
+  <!-- 引入嵌入式 STOCK 悬浮球插件 SDK -->
+  <script src="widget.js"></script>
+</body>
+</html>

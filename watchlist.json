@@ -1,0 +1,22 @@
+[
+  {
+    "symbol": "usNVDA",
+    "name": "英伟达",
+    "market": "US"
+  },
+  {
+    "symbol": "usnvda.oq",
+    "name": "英伟达",
+    "market": "US"
+  },
+  {
+    "symbol": "ussony.n",
+    "name": "索尼",
+    "market": "US"
+  },
+  {
+    "symbol": "nundefined",
+    "name": "",
+    "market": "A"
+  }
+]

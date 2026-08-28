@@ -1,0 +1,63 @@
+{
+  "name": "dsh-stock-plugin",
+  "version": "1.2.0",
+  "description": "A/港/美/全球股票实时行情盯盘与量化投研插件 - 适配 DeepSeek Harness (DSH) Web 宿主",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node server.js",
+    "build:client": "node build_client.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/xuexiaolei1997/dsh-stock-plugin.git"
+  },
+  "homepage": "https://github.com/xuexiaolei1997/dsh-stock-plugin#readme",
+  "bugs": {
+    "url": "https://github.com/xuexiaolei1997/dsh-stock-plugin/issues"
+  },
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "cordis.patch.yml",
+    "stock-api.js",
+    "server.js",
+    "public",
+    "skills",
+    "README.md",
+    "LICENSE",
+    "package.json"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web"
+    }
+  },
+  "bin": {
+    "dsh-stock-server": "./server.js"
+  },
+  "keywords": [
+    "deepseek",
+    "deepseek-harness",
+    "dsh",
+    "dsh-plugin",
+    "stock",
+    "a-share",
+    "kline",
+    "finance",
+    "trading",
+    "investment-research"
+  ],
+  "author": "xuexiaolei1997",
+  "license": "MIT",
+  "dependencies": {}
+}

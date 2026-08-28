@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="zh-CN" class="dark font-medium">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>OmniStock - 独立股票量化与盯盘工作台 (DSH Plugin)</title>
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          colors: {
+            darkBg: '#090d16',
+          }
+        }
+      }
+    }
+  </script>
+  <!-- ECharts -->
+  <script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
+  <style>
+    /* 字体大小缩放 */
+    html.font-standard { font-size: 14px; }
+    html.font-medium { font-size: 16px; }
+    html.font-large { font-size: 18px; }
+
+    /* 滚动条美化 */
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: rgba(148, 163, 184, 0.25); border-radius: 9999px; }
+    ::-webkit-scrollbar-thumb:hover { background: rgba(148, 163, 184, 0.45); }
+    .no-scrollbar::-webkit-scrollbar { display: none; }
+    .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+
+    /* 🌟 极致丝滑的悬浮球与变形动画系统 */
+    #omni-morph-widget {
+      transition: width 0.38s cubic-bezier(0.16, 1, 0.3, 1),
+                  height 0.38s cubic-bezier(0.16, 1, 0.3, 1),
+                  left 0.35s cubic-bezier(0.16, 1, 0.3, 1),
+                  top 0.35s cubic-bezier(0.16, 1, 0.3, 1),
+                  border-radius 0.32s cubic-bezier(0.16, 1, 0.3, 1),
+                  box-shadow 0.35s ease;
+      will-change: width, height, left, top, border-radius;
+    }
+
+    #omni-morph-widget.is-dragging {
+      transition: none !important;
+    }
+
+    /* 摸鱼极简浅色半透明磨砂球 */
+    .slacker-glass-ball {
+      background: rgba(255, 255, 255, 0.16);
+      backdrop-filter: blur(20px) saturate(180%);
+      -webkit-backdrop-filter: blur(20px) saturate(180%);
+      border: 1px solid rgba(255, 255, 255, 0.35);
+      box-shadow: 0 4px 20px -2px rgba(0, 0, 0, 0.15), inset 0 0 12px rgba(255, 255, 255, 0.2);
+      transition: all 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+      opacity: 0.82;
+    }
+    .slacker-glass-ball:hover {
+      opacity: 1;
+      transform: scale(1.06);
+      background: rgba(255, 255, 255, 0.26);
+      box-shadow: 0 6px 24px -2px rgba(59, 130, 246, 0.25), inset 0 0 16px rgba(255, 255, 255, 0.35);
+    }
+
+    /* 状态切换平滑淡入淡出 */
+    .morph-view {
+      transition: opacity 0.25s cubic-bezier(0.16, 1, 0.3, 1), transform 0.32s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+  </style>
+</head>
+<body class="bg-[#090d16] text-slate-100 min-h-screen antialiased selection:bg-blue-600 selection:text-white">
+  <!-- 应用主体挂载点 -->
+  <div id="app-root"></div>
+
+  <!-- 技术指标计算引擎 -->
+  <script src="/indicators.js"></script>
+  <!-- 核心交互应用 -->
+  <script src="/app.js"></script>
+</body>
+</html>
