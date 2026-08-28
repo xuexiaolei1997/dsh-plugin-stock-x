@@ -59,8 +59,8 @@ const server = http.createServer(async (req, res) => {
 
   // Normalize path
   let subPath = pathname;
-  if (subPath.startsWith('/dsh-stock-plugin')) {
-    subPath = subPath.replace(/^\/dsh-stock-plugin/, '');
+  if (subPath.startsWith('/dsh-plugin-stock-x')) {
+    subPath = subPath.replace(/^\/dsh-plugin-stock-x/, '');
   } else if (subPath.startsWith('/api')) {
     subPath = subPath.replace(/^\/api/, '');
   }

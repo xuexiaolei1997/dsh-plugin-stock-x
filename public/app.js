@@ -27,7 +27,7 @@ async function fetchCachedF10(symbol) {
   if (cached && (Date.now() - cached.timestamp < 10 * 60 * 1000)) {
     return cached.data;
   }
-  const res = await fetch(`/dsh-stock-plugin/f10/${symbol}`).then(r => r.json());
+  const res = await fetch(`/dsh-plugin-stock-x/f10/${symbol}`).then(r => r.json());
   if (res.data) {
     memoryCache.f10.set(key, { data: res.data, timestamp: Date.now() });
   }
@@ -40,7 +40,7 @@ async function fetchCachedNews(symbol, name) {
   if (cached && (Date.now() - cached.timestamp < 2 * 60 * 1000)) {
     return cached.data;
   }
-  const res = await fetch(`/dsh-stock-plugin/news/${symbol}?name=${encodeURIComponent(name)}`).then(r => r.json());
+  const res = await fetch(`/dsh-plugin-stock-x/news/${symbol}?name=${encodeURIComponent(name)}`).then(r => r.json());
   if (res.data) {
     memoryCache.news.set(key, { data: res.data, timestamp: Date.now() });
   }
@@ -55,7 +55,7 @@ async function fetchCachedKline(symbol, period) {
     return cached.data;
   }
   try {
-    const res = await fetch(`/dsh-stock-plugin/kline/${symbol}?period=${period}&count=150`).then(r => r.json());
+    const res = await fetch(`/dsh-plugin-stock-x/kline/${symbol}?period=${period}&count=150`).then(r => r.json());
     const bars = res.data || [];
     if (bars.length > 0) {
       memoryCache.kline.set(key, { data: bars, timestamp: Date.now() });
@@ -73,7 +73,7 @@ async function fetchCachedAIAnalysis(symbol) {
   if (cached && (Date.now() - cached.timestamp < 5 * 60 * 1000)) {
     return cached.data;
   }
-  const res = await fetch(`/dsh-stock-plugin/ai-analysis/${symbol}`).then(r => r.json());
+  const res = await fetch(`/dsh-plugin-stock-x/ai-analysis/${symbol}`).then(r => r.json());
   if (res.data) {
     memoryCache.ai.set(key, { data: res.data, timestamp: Date.now() });
   }
@@ -137,8 +137,8 @@ function toggleTheme() {
 async function refreshData() {
   try {
     const [wlRes, idxRes] = await Promise.all([
-      fetch('/dsh-stock-plugin/watchlist').then(r => r.json()),
-      fetch('/dsh-stock-plugin/indices').then(r => r.json())
+      fetch('/dsh-plugin-stock-x/watchlist').then(r => r.json()),
+      fetch('/dsh-plugin-stock-x/indices').then(r => r.json())
     ]);
     if (wlRes.data) watchlist = wlRes.data;
     if (idxRes.data) indices = idxRes.data;
@@ -761,7 +761,7 @@ function bindDrawerEvents() {
       clearTimeout(timeout);
       if (!q) { searchDropdown.classList.add('hidden'); return; }
       timeout = setTimeout(async () => {
-        const res = await fetch(`/dsh-stock-plugin/search?q=${encodeURIComponent(q)}`).then(r => r.json());
+        const res = await fetch(`/dsh-plugin-stock-x/search?q=${encodeURIComponent(q)}`).then(r => r.json());
         const list = res.data || [];
         if (list.length === 0) {
           searchDropdown.innerHTML = `<div class="p-3.5 text-center text-xs text-slate-400">未找到匹配股票</div>`;
@@ -1947,7 +1947,7 @@ function closeAllWindows() {
 }
 
 async function addToWatchlist(symbol, name, market) {
-  await fetch('/dsh-stock-plugin/watchlist', {
+  await fetch('/dsh-plugin-stock-x/watchlist', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ symbol, name, market })
@@ -1959,7 +1959,7 @@ async function addToWatchlist(symbol, name, market) {
 }
 
 async function removeFromWatchlist(symbol) {
-  await fetch(`/dsh-stock-plugin/watchlist/${symbol}`, { method: 'DELETE' });
+  await fetch(`/dsh-plugin-stock-x/watchlist/${symbol}`, { method: 'DELETE' });
   await refreshData();
   updateWatchlistDOM();
   const badge = document.getElementById('watchlist-count-badge');

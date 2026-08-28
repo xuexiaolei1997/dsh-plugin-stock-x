@@ -10,12 +10,12 @@ async function main() {
   const res = await fetch(url);
   let code = await res.text();
 
-  // Replace dsh-stock-watch with dsh-stock-plugin
-  code = code.replaceAll('dsh-stock-watch', 'dsh-stock-plugin');
+  // Replace dsh-stock-watch with dsh-plugin-stock-x
+  code = code.replaceAll('dsh-stock-watch', 'dsh-plugin-stock-x');
 
   fs.writeFileSync(path.join(__dirname, 'index.js'), code, 'utf8');
 
-  const destDir = path.join(os.homedir(), '.dsh', 'profiles', 'web', 'node_modules', 'dsh-stock-plugin');
+  const destDir = path.join(os.homedir(), '.dsh', 'profiles', 'web', 'node_modules', 'dsh-plugin-stock-x');
   if (!fs.existsSync(destDir)) fs.mkdirSync(destDir, { recursive: true });
   fs.writeFileSync(path.join(destDir, 'index.js'), code, 'utf8');
 

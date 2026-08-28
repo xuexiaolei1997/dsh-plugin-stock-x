@@ -1,4 +1,4 @@
-# 📈 dsh-stock-plugin (DeepSeek Harness 股票盯盘与量化投研插件)
+# 📈 dsh-plugin-stock-x (DeepSeek Harness 股票盯盘与量化投研插件)
 
 <p align="center">
   <img src="https://img.shields.io/badge/DeepSeek%20Harness-Plugin-blue?style=flat-square&logo=github" alt="DSH Plugin" />
@@ -56,8 +56,8 @@
 ### 第一步：克隆仓库并进入目录
 
 ```bash
-git clone https://github.com/xuexiaolei1997/dsh-stock-plugin.git
-cd dsh-stock-plugin
+git clone https://github.com/xuexiaolei1997/dsh-plugin-stock-x.git
+cd dsh-plugin-stock-x
 ```
 
 ### 第二步：安装项目依赖
@@ -68,7 +68,7 @@ npm install
 
 ### 第三步：安装插件到 DSH Web Profile
 
-在 `dsh-stock-plugin` 根目录下执行：
+在 `dsh-plugin-stock-x` 根目录下执行：
 
 ```bash
 dsh plugin --profile web add file:.
@@ -76,7 +76,7 @@ dsh plugin --profile web add file:.
 
 > 💡 **提示**：如果使用完整绝对路径，也可以执行：
 > ```bash
-> dsh plugin --profile web add file:D:\你的插件目录路径\dsh-stock-plugin
+> dsh plugin --profile web add file:D:\你的插件目录路径\dsh-plugin-stock-x
 > ```
 
 ### 第四步：启动 DeepSeek Harness Web 宿主
@@ -109,7 +109,7 @@ npm start
 如需从 DSH Web 环境卸载该插件，在终端执行：
 
 ```bash
-dsh plugin --profile web remove dsh-stock-plugin
+dsh plugin --profile web remove dsh-plugin-stock-x
 ```
 
 ---
@@ -117,7 +117,7 @@ dsh plugin --profile web remove dsh-stock-plugin
 ## 📂 项目结构
 
 ```text
-dsh-stock-plugin/
+dsh-plugin-stock-x/
 ├── index.js             # DSH/Cordis 插件服务端入口 (路由注册、提示词注入)
 ├── client.js            # DSH 浏览器端插件运行时 (悬浮球、自选抽屉、多窗口工作台)
 ├── cordis.patch.yml     # DSH Bundle 插件配置 Patch

@@ -8,4 +8,4 @@ dsh plugin --profile web add file:.
 npx @deepseek-ai/dsh web
 
 # 4. 卸载插件 (需要时执行)
-# dsh plugin --profile web remove dsh-stock-plugin
+# dsh plugin --profile web remove dsh-plugin-stock-x

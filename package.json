@@ -1,5 +1,5 @@
 {
-  "name": "dsh-stock-plugin",
+  "name": "dsh-plugin-stock-x",
   "version": "1.2.0",
   "description": "A/港/美/全球股票实时行情盯盘与量化投研插件 - 适配 DeepSeek Harness (DSH) Web 宿主",
   "main": "index.js",
@@ -10,11 +10,11 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/xuexiaolei1997/dsh-stock-plugin.git"
+    "url": "git+https://github.com/xuexiaolei1997/dsh-plugin-stock-x.git"
   },
-  "homepage": "https://github.com/xuexiaolei1997/dsh-stock-plugin#readme",
+  "homepage": "https://github.com/xuexiaolei1997/dsh-plugin-stock-x#readme",
   "bugs": {
-    "url": "https://github.com/xuexiaolei1997/dsh-stock-plugin/issues"
+    "url": "https://github.com/xuexiaolei1997/dsh-plugin-stock-x/issues"
   },
   "exports": {
     ".": "./index.js",

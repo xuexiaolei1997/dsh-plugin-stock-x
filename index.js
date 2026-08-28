@@ -41,7 +41,7 @@ function saveWatchlist(list) {
 
 let watchlist = getWatchlist();
 
-export const name = "dsh-stock-plugin";
+export const name = "dsh-plugin-stock-x";
 
 export function ensureUserSkills(logger) {
   try {
@@ -60,17 +60,17 @@ export function ensureUserSkills(logger) {
         files.forEach(f => {
           fs.copyFileSync(path.join(srcSkillDir, f), path.join(targetSkillDir, f));
         });
-        logger?.info?.(`[dsh-stock-plugin] 已注入投研技能: ${skill}`);
+        logger?.info?.(`[dsh-plugin-stock-x] 已注入投研技能: ${skill}`);
       }
     });
   } catch (err) {
-    logger?.warn?.(`[dsh-stock-plugin] 技能提示: ${err.message}`);
+    logger?.warn?.(`[dsh-plugin-stock-x] 技能提示: ${err.message}`);
   }
 }
 
 export function apply(ctx) {
   const logger = ctx.logger || console;
-  logger.info?.("[dsh-stock-plugin] 自定义摸鱼悬浮球与多窗口工作台已初始化");
+  logger.info?.("[dsh-plugin-stock-x] 自定义摸鱼悬浮球与多窗口工作台已初始化");
 
   ensureUserSkills(logger);
 
@@ -101,8 +101,8 @@ export function apply(ctx) {
         const pathname = url.pathname;
 
         let subPath = pathname;
-        if (subPath.startsWith("/dsh-stock-plugin")) {
-          subPath = subPath.replace(/^\/dsh-stock-plugin/, "");
+        if (subPath.startsWith("/dsh-plugin-stock-x")) {
+          subPath = subPath.replace(/^\/dsh-plugin-stock-x/, "");
         } else if (subPath.startsWith("/api")) {
           subPath = subPath.replace(/^\/api/, "");
         }
@@ -228,23 +228,23 @@ export function apply(ctx) {
     hostCtx.effect(() => {
       const dispose = hostCtx.webServer.register({
         kind: "prefix",
-        path: "/dsh-stock-plugin",
+        path: "/dsh-plugin-stock-x",
         handler: handleStockRequest
       });
       return () => {
         dispose?.();
       };
-    }, "dsh-stock-plugin: routes");
+    }, "dsh-plugin-stock-x: routes");
   });
 
   ctx.inject(["systemPrompt"], (promptCtx) => {
     promptCtx.effect(() => {
       return promptCtx.systemPrompt.section({
-        name: "dsh-stock-plugin.analysis",
+        name: "dsh-plugin-stock-x.analysis",
         order: 200,
         text: "当用户意图为分析某家上市公司或股票时：请首先使用技能 investment-research 完成基本面、财务报表、K线技术走势与量化规则研判，并给出严谨的投资评级与操盘策略。"
       });
-    }, "dsh-stock-plugin: analysis prompt section");
+    }, "dsh-plugin-stock-x: analysis prompt section");
   });
 }
 

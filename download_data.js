@@ -10,7 +10,7 @@ async function downloadData() {
   const dataDir = path.join(__dirname, 'data');
   if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
 
-  const destDataDir = path.join(os.homedir(), '.dsh', 'profiles', 'web', 'node_modules', 'dsh-stock-plugin', 'data');
+  const destDataDir = path.join(os.homedir(), '.dsh', 'profiles', 'web', 'node_modules', 'dsh-plugin-stock-x', 'data');
   if (!fs.existsSync(destDataDir)) fs.mkdirSync(destDataDir, { recursive: true });
 
   for (const f of files) {

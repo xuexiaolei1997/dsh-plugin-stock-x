@@ -10,11 +10,11 @@ async function main() {
   const appCode = fs.readFileSync(path.join(__dirname, 'public', 'app.js'), 'utf8');
 
   const clientTemplate = `/**
- * dsh-stock-plugin — 浏览器端 (client.js)
+ * dsh-plugin-stock-x — 浏览器端 (client.js)
  * 纯原生高性能加载自选股摸鱼悬浮球、自选股抽屉与多窗口量化工作台
  */
 window.__ModuleLoader__.load({
-  id: "dsh-stock-plugin",
+  id: "dsh-plugin-stock-x",
   factory: function (require) {
     var module = { exports: {} };
     var exports = module.exports;
@@ -57,16 +57,16 @@ window.__ModuleLoader__.load({
           (new Function(${JSON.stringify(indicatorsCode)}))();
           // 注入完整自研工作台应用 (包含摸鱼悬浮球、8大全球指数、多窗口看板、量化诊断)
           (new Function(${JSON.stringify(appCode)}))();
-          console.log("[dsh-stock-plugin] 摸鱼悬浮球与自选工作台已就绪");
+          console.log("[dsh-plugin-stock-x] 摸鱼悬浮球与自选工作台已就绪");
         } catch (err) {
-          console.error("[dsh-stock-plugin] 启动前端应用失败:", err);
+          console.error("[dsh-plugin-stock-x] 启动前端应用失败:", err);
         }
       }
 
       startCustomApp();
     }
 
-    var name = "dsh-stock-plugin";
+    var name = "dsh-plugin-stock-x";
     var inject = [];
     function apply(ctx) {
       if (typeof window !== "undefined") {
@@ -89,7 +89,7 @@ window.__ModuleLoader__.load({
 
   fs.writeFileSync(path.join(__dirname, 'client.js'), clientTemplate, 'utf8');
 
-  const destDir = path.join(os.homedir(), '.dsh', 'profiles', 'web', 'node_modules', 'dsh-stock-plugin');
+  const destDir = path.join(os.homedir(), '.dsh', 'profiles', 'web', 'node_modules', 'dsh-plugin-stock-x');
   if (fs.existsSync(destDir)) {
     fs.writeFileSync(path.join(destDir, 'client.js'), clientTemplate, 'utf8');
   }
