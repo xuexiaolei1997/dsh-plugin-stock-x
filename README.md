@@ -13,6 +13,18 @@
 
 ---
 
+## 📸 界面预览 (Screenshots)
+
+<div align="center">
+  <p><b>🌙 深色主题多窗口看盘工作台</b></p>
+  <img src="images/dark.png" alt="深色主题看盘工作台" width="95%" />
+  <br/><br/>
+  <p><b>☀️ 亮色主题多窗口看盘工作台</b></p>
+  <img src="images/light.png" alt="亮色主题看盘工作台" width="95%" />
+</div>
+
+---
+
 ## 🌟 核心特性
 
 - ⚡ **纯 JS / 零外部运行依赖**：基于 Node.js 原生 API 与前端 Canvas/ECharts，无需配置 Python 环境或本地数据库。
