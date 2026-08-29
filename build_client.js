@@ -23,8 +23,19 @@ window.__ModuleLoader__.load({
     function initStockWidget() {
       if (typeof window === "undefined") return;
 
-      // 1. 动态挂载 Tailwind CSS
+      // 1. 动态挂载 Tailwind CSS (显式启用 class dark mode)
       if (!document.getElementById("dsh-tailwind-cdn")) {
+        window.tailwind = window.tailwind || {};
+        window.tailwind.config = {
+          darkMode: 'class',
+          theme: {
+            extend: {
+              colors: {
+                darkBg: '#090d16',
+              }
+            }
+          }
+        };
         var tw = document.createElement("script");
         tw.id = "dsh-tailwind-cdn";
         tw.src = "https://cdn.tailwindcss.com";
@@ -89,9 +100,13 @@ window.__ModuleLoader__.load({
 
   fs.writeFileSync(path.join(__dirname, 'client.js'), clientTemplate, 'utf8');
 
-  const destDir = path.join(os.homedir(), '.dsh', 'profiles', 'web', 'node_modules', 'dsh-plugin-stock-x');
-  if (fs.existsSync(destDir)) {
-    fs.writeFileSync(path.join(destDir, 'client.js'), clientTemplate, 'utf8');
+  try {
+    const destDir = path.join(os.homedir(), '.dsh', 'profiles', 'web', 'node_modules', 'dsh-plugin-stock-x');
+    if (fs.existsSync(destDir)) {
+      fs.writeFileSync(path.join(destDir, 'client.js'), clientTemplate, 'utf8');
+    }
+  } catch (err) {
+    // Sandboxed or profile dir not writable
   }
 
   console.log('client.js successfully generated! Size:', clientTemplate.length);

@@ -21,17 +21,35 @@ const memoryCache = {
   ai: new Map()
 };
 
+// 前端并发请求合并去重器 (防止同时多窗口重复请求相同数据)
+const clientInFlight = new Map();
+
 async function fetchCachedF10(symbol) {
   const key = symbol.toLowerCase();
   const cached = memoryCache.f10.get(key);
   if (cached && (Date.now() - cached.timestamp < 10 * 60 * 1000)) {
     return cached.data;
   }
-  const res = await fetch(`/dsh-plugin-stock-x/f10/${symbol}`).then(r => r.json());
-  if (res.data) {
-    memoryCache.f10.set(key, { data: res.data, timestamp: Date.now() });
+  if (clientInFlight.has(`f10_${key}`)) {
+    return clientInFlight.get(`f10_${key}`);
   }
-  return res.data;
+  const promise = (async () => {
+    try {
+      const res = await fetch(`/dsh-plugin-stock-x/f10/${symbol}`).then(r => r.json());
+      if (res.data) {
+        memoryCache.f10.set(key, { data: res.data, timestamp: Date.now() });
+      }
+      return res.data;
+    } catch (_) {
+      return null;
+    }
+  })();
+  clientInFlight.set(`f10_${key}`, promise);
+  try {
+    return await promise;
+  } finally {
+    clientInFlight.delete(`f10_${key}`);
+  }
 }
 
 async function fetchCachedNews(symbol, name) {
@@ -40,11 +58,26 @@ async function fetchCachedNews(symbol, name) {
   if (cached && (Date.now() - cached.timestamp < 2 * 60 * 1000)) {
     return cached.data;
   }
-  const res = await fetch(`/dsh-plugin-stock-x/news/${symbol}?name=${encodeURIComponent(name)}`).then(r => r.json());
-  if (res.data) {
-    memoryCache.news.set(key, { data: res.data, timestamp: Date.now() });
+  if (clientInFlight.has(`news_${key}`)) {
+    return clientInFlight.get(`news_${key}`);
   }
-  return res.data;
+  const promise = (async () => {
+    try {
+      const res = await fetch(`/dsh-plugin-stock-x/news/${symbol}?name=${encodeURIComponent(name)}`).then(r => r.json());
+      if (res.data) {
+        memoryCache.news.set(key, { data: res.data, timestamp: Date.now() });
+      }
+      return res.data;
+    } catch (_) {
+      return null;
+    }
+  })();
+  clientInFlight.set(`news_${key}`, promise);
+  try {
+    return await promise;
+  } finally {
+    clientInFlight.delete(`news_${key}`);
+  }
 }
 
 async function fetchCachedKline(symbol, period) {
@@ -54,16 +87,27 @@ async function fetchCachedKline(symbol, period) {
   if (cached && (Date.now() - cached.timestamp < ttl)) {
     return cached.data;
   }
-  try {
-    const res = await fetch(`/dsh-plugin-stock-x/kline/${symbol}?period=${period}&count=150`).then(r => r.json());
-    const bars = res.data || [];
-    if (bars.length > 0) {
-      memoryCache.kline.set(key, { data: bars, timestamp: Date.now() });
+  if (clientInFlight.has(`kline_${key}`)) {
+    return clientInFlight.get(`kline_${key}`);
+  }
+  const promise = (async () => {
+    try {
+      const res = await fetch(`/dsh-plugin-stock-x/kline/${symbol}?period=${period}&count=150`).then(r => r.json());
+      const bars = res.data || [];
+      if (bars.length > 0) {
+        memoryCache.kline.set(key, { data: bars, timestamp: Date.now() });
+      }
+      return bars;
+    } catch (err) {
+      console.error('Fetch kline error:', err);
+      return [];
     }
-    return bars;
-  } catch (err) {
-    console.error('Fetch kline error:', err);
-    return [];
+  })();
+  clientInFlight.set(`kline_${key}`, promise);
+  try {
+    return await promise;
+  } finally {
+    clientInFlight.delete(`kline_${key}`);
   }
 }
 
@@ -73,11 +117,26 @@ async function fetchCachedAIAnalysis(symbol) {
   if (cached && (Date.now() - cached.timestamp < 5 * 60 * 1000)) {
     return cached.data;
   }
-  const res = await fetch(`/dsh-plugin-stock-x/ai-analysis/${symbol}`).then(r => r.json());
-  if (res.data) {
-    memoryCache.ai.set(key, { data: res.data, timestamp: Date.now() });
+  if (clientInFlight.has(`ai_${key}`)) {
+    return clientInFlight.get(`ai_${key}`);
   }
-  return res.data;
+  const promise = (async () => {
+    try {
+      const res = await fetch(`/dsh-plugin-stock-x/ai-analysis/${symbol}`).then(r => r.json());
+      if (res.data) {
+        memoryCache.ai.set(key, { data: res.data, timestamp: Date.now() });
+      }
+      return res.data;
+    } catch (_) {
+      return null;
+    }
+  })();
+  clientInFlight.set(`ai_${key}`, promise);
+  try {
+    return await promise;
+  } finally {
+    clientInFlight.delete(`ai_${key}`);
+  }
 }
 
 // 悬浮部件坐标
@@ -119,9 +178,31 @@ window.addEventListener('resize', () => {
 });
 
 function applyThemeAndFont() {
+  const isDark = theme === 'dark';
+  if (isDark) {
+    document.documentElement.classList.add('dark');
+    document.documentElement.classList.remove('light');
+  } else {
+    document.documentElement.classList.remove('dark');
+    document.documentElement.classList.add('light');
+  }
   document.documentElement.className = `${theme} font-${fontSize}`;
-  document.body.style.backgroundColor = theme === 'dark' ? '#090d16' : '#f8fafc';
-  document.body.style.color = theme === 'dark' ? '#f8fafc' : '#0f172a';
+
+  const appRoot = document.getElementById('app-root');
+  if (appRoot) {
+    if (isDark) {
+      appRoot.classList.add('dark');
+      appRoot.classList.remove('light');
+    } else {
+      appRoot.classList.remove('dark');
+      appRoot.classList.add('light');
+    }
+  }
+
+  if (document.body) {
+    document.body.style.backgroundColor = isDark ? '#090d16' : '#f8fafc';
+    document.body.style.color = isDark ? '#f8fafc' : '#0f172a';
+  }
 }
 
 function toggleTheme() {
@@ -129,8 +210,17 @@ function toggleTheme() {
   localStorage.setItem('omnistock_theme', theme);
   applyThemeAndFont();
   renderInitialApp();
+  // 重新渲染所有打开窗口的内容面板（支持图表、F10、资讯、AI分析全量同步换色）
   floatingWindows.forEach(w => {
-    if (w.period !== 'f10' && w.period !== 'news' && w.period !== 'ai') renderChart(w);
+    if (w.period === 'f10') {
+      renderF10(w);
+    } else if (w.period === 'news') {
+      renderNews(w);
+    } else if (w.period === 'ai') {
+      renderAIAnalysis(w);
+    } else {
+      renderChart(w);
+    }
   });
 }
 
@@ -147,17 +237,29 @@ async function refreshData() {
   }
 }
 
+let isRefreshing = false;
 async function refreshQuotesOnly() {
-  await refreshData();
-  updateWatchlistDOM();
-  updateRibbonDOM();
-  updateOpenChartsQuotes();
+  if (isRefreshing) return;
+  isRefreshing = true;
+  try {
+    await refreshData();
+    updateWatchlistDOM();
+    updateRibbonDOM();
+    updateOpenChartsQuotes();
+  } finally {
+    isRefreshing = false;
+  }
 }
 
 function updateWatchlistDOM() {
   const container = document.getElementById('watchlist-items-container');
   if (!container) return;
   const isDark = theme === 'dark';
+
+  // 确保容器自身的外观与主题严格同步
+  container.className = `flex-1 overflow-y-auto divide-y max-h-[300px] ${
+    isDark ? 'bg-slate-900 divide-slate-800 text-slate-100' : 'bg-white divide-slate-100 text-slate-800'
+  }`;
 
   if (watchlist.length === 0) {
     container.innerHTML = `<div class="p-8 text-center text-sm ${isDark ? 'bg-slate-900 text-slate-400' : 'bg-white text-slate-500'}">暂无自选股票，请在上方搜索添加</div>`;
@@ -171,7 +273,7 @@ function updateWatchlistDOM() {
 
     return `
       <div class="px-3.5 py-2.5 flex items-center justify-between gap-2 transition-colors group ${
-        isDark ? 'bg-slate-900 hover:bg-slate-800 text-slate-100' : 'bg-white hover:bg-blue-50/80 text-slate-800'
+        isDark ? 'bg-slate-900 hover:bg-slate-800 text-slate-100' : 'bg-white hover:bg-slate-50 text-slate-800'
       }">
         <div class="flex items-center gap-2 min-w-0 flex-1 cursor-pointer" onclick="openChart('${item.symbol}', '${item.name}', '${item.market}')">
           <span class="text-[10px] font-bold px-1.5 py-0.5 rounded border flex-shrink-0 ${
@@ -180,8 +282,8 @@ function updateWatchlistDOM() {
             'bg-amber-500/10 text-amber-500 border-amber-500/20'
           }">${item.market || 'A'}</span>
           <div class="truncate">
-            <div class="font-bold text-sm group-hover:text-blue-500 transition-colors truncate ${isDark ? 'text-slate-100' : 'text-slate-800'}">${item.name}</div>
-            <div class="text-xs font-mono opacity-50 ${isDark ? 'text-slate-400' : 'text-slate-500'}">${item.symbol}</div>
+            <div class="font-bold text-sm group-hover:text-blue-500 transition-colors truncate ${isDark ? 'text-slate-100' : 'text-slate-900'}">${item.name}</div>
+            <div class="text-xs font-mono opacity-60 ${isDark ? 'text-slate-400' : 'text-slate-500'}">${item.symbol}</div>
           </div>
         </div>
 
@@ -208,7 +310,7 @@ function updateWatchlistDOM() {
             </svg>
           </button>
           <button onclick="removeFromWatchlist('${item.symbol}')"
-            class="p-1 hover:bg-red-600/20 text-slate-400 hover:text-red-500 rounded-lg text-sm transition-colors"
+            class="p-1 rounded-lg text-sm transition-colors ${isDark ? 'hover:bg-red-600/20 text-slate-400 hover:text-red-400' : 'hover:bg-red-50 text-slate-400 hover:text-red-500'}"
             title="移出自选">
             ✕
           </button>
@@ -391,26 +493,26 @@ function renderFooterManagerHtml() {
     return `
       <div class="flex items-center justify-between">
         <span class="text-xs font-semibold text-blue-400">
-          已开 <b class="text-white">${floatingWindows.length}</b> 个看图窗口:
+          已开 <b class="${isDark ? 'text-white' : 'text-slate-900'}">${floatingWindows.length}</b> 个看图窗口:
         </span>
         <div class="flex items-center gap-1.5">
-          <button onclick="minimizeAllWindows()" class="px-2 py-0.5 rounded text-xs text-slate-400 hover:text-white bg-slate-800/60">收起</button>
-          <button onclick="restoreAllWindows()" class="px-2 py-0.5 rounded text-xs text-slate-400 hover:text-white bg-slate-800/60">展开</button>
-          <button onclick="closeAllWindows()" class="px-2 py-0.5 rounded text-xs text-red-400 hover:text-red-300 bg-red-950/50">关闭</button>
+          <button onclick="minimizeAllWindows()" class="px-2 py-0.5 rounded text-xs transition-colors ${isDark ? 'text-slate-400 hover:text-white bg-slate-800/60' : 'text-slate-600 hover:text-slate-900 bg-slate-200/80'}">收起</button>
+          <button onclick="restoreAllWindows()" class="px-2 py-0.5 rounded text-xs transition-colors ${isDark ? 'text-slate-400 hover:text-white bg-slate-800/60' : 'text-slate-600 hover:text-slate-900 bg-slate-200/80'}">展开</button>
+          <button onclick="closeAllWindows()" class="px-2 py-0.5 rounded text-xs transition-colors ${isDark ? 'text-red-400 hover:text-red-300 bg-red-950/50' : 'text-red-600 hover:text-red-700 bg-red-100'}">关闭</button>
         </div>
       </div>
       <div class="flex items-center gap-1.5 pt-0.5">
         <button onclick="applyWindowLayout('tile_auto')" class="flex-1 py-1 rounded-lg text-xs font-semibold transition-all ${
-          currentLayout === 'tile_auto' ? 'bg-blue-600 text-white' : (isDark ? 'bg-slate-800 text-slate-300 hover:bg-slate-700' : 'bg-white border text-slate-700')
+          currentLayout === 'tile_auto' ? 'bg-blue-600 text-white' : (isDark ? 'bg-slate-800 text-slate-300 hover:bg-slate-700' : 'bg-white border border-slate-300 text-slate-700 hover:bg-slate-100')
         }">🔲 平铺</button>
         <button onclick="applyWindowLayout('split_2')" class="flex-1 py-1 rounded-lg text-xs font-semibold transition-all ${
-          currentLayout === 'split_2' ? 'bg-blue-600 text-white' : (isDark ? 'bg-slate-800 text-slate-300 hover:bg-slate-700' : 'bg-white border text-slate-700')
+          currentLayout === 'split_2' ? 'bg-blue-600 text-white' : (isDark ? 'bg-slate-800 text-slate-300 hover:bg-slate-700' : 'bg-white border border-slate-300 text-slate-700 hover:bg-slate-100')
         }">⬛ 双屏</button>
         <button onclick="applyWindowLayout('grid_4')" class="flex-1 py-1 rounded-lg text-xs font-semibold transition-all ${
-          currentLayout === 'grid_4' ? 'bg-blue-600 text-white' : (isDark ? 'bg-slate-800 text-slate-300 hover:bg-slate-700' : 'bg-white border text-slate-700')
+          currentLayout === 'grid_4' ? 'bg-blue-600 text-white' : (isDark ? 'bg-slate-800 text-slate-300 hover:bg-slate-700' : 'bg-white border border-slate-300 text-slate-700 hover:bg-slate-100')
         }">田 四分屏</button>
         <button onclick="applyWindowLayout('cascade')" class="flex-1 py-1 rounded-lg text-xs font-semibold transition-all ${
-          currentLayout === 'cascade' ? 'bg-blue-600 text-white' : (isDark ? 'bg-slate-800 text-slate-300 hover:bg-slate-700' : 'bg-white border text-slate-700')
+          currentLayout === 'cascade' ? 'bg-blue-600 text-white' : (isDark ? 'bg-slate-800 text-slate-300 hover:bg-slate-700' : 'bg-white border border-slate-300 text-slate-700 hover:bg-slate-100')
         }">📑 层叠</button>
       </div>
     `;
@@ -759,29 +861,46 @@ function bindDrawerEvents() {
     searchInput.addEventListener('input', e => {
       const q = e.target.value.trim();
       clearTimeout(timeout);
-      if (!q) { searchDropdown.classList.add('hidden'); return; }
+      if (!q) {
+        searchDropdown.classList.add('hidden');
+        searchDropdown.innerHTML = '';
+        return;
+      }
+
+      // 展现加载中提示
+      searchDropdown.innerHTML = `<div class="p-3 text-center text-xs text-slate-400">正在搜索【${q}】...</div>`;
+      searchDropdown.classList.remove('hidden');
+
       timeout = setTimeout(async () => {
-        const res = await fetch(`/dsh-plugin-stock-x/search?q=${encodeURIComponent(q)}`).then(r => r.json());
-        const list = res.data || [];
-        if (list.length === 0) {
-          searchDropdown.innerHTML = `<div class="p-3.5 text-center text-xs text-slate-400">未找到匹配股票</div>`;
-        } else {
-          searchDropdown.innerHTML = list.map(item => `
-            <div onclick="selectAndAddStock('${item.symbol}', '${item.name}', '${item.market}')"
-              class="px-3.5 py-2.5 cursor-pointer flex items-center justify-between hover:bg-blue-600/15 transition-colors group">
-              <div class="flex items-center gap-2 min-w-0">
-                <span class="text-[10px] font-bold px-1.5 py-0.5 rounded border bg-blue-500/10 text-blue-400 border-blue-500/20">${item.market}</span>
-                <span class="font-bold text-xs truncate group-hover:text-blue-400">${item.name}</span>
-                <span class="text-xs font-mono opacity-50">${item.symbol}</span>
+        try {
+          const res = await fetch(`/dsh-plugin-stock-x/search?q=${encodeURIComponent(q)}`).then(r => r.json());
+          const list = (res.data || []).filter(item => item && item.code && item.name);
+          if (list.length === 0) {
+            searchDropdown.innerHTML = `
+              <div class="p-4 text-center text-xs text-slate-400">
+                <div class="font-semibold text-slate-300 mb-1">🔍 未搜索到【${q}】相关股票</div>
+                <div class="text-[11px] opacity-70">支持输入股票代码 (如 600519/00700/NVDA) 或 拼音首字母 (如 gzmt/bdyy)</div>
+              </div>`;
+          } else {
+            searchDropdown.innerHTML = list.map(item => `
+              <div onclick="selectAndAddStock('${item.symbol}', '${item.name}', '${item.market}')"
+                class="px-3.5 py-2.5 cursor-pointer flex items-center justify-between hover:bg-blue-600/15 transition-colors group">
+                <div class="flex items-center gap-2 min-w-0">
+                  <span class="text-[10px] font-bold px-1.5 py-0.5 rounded border bg-blue-500/10 text-blue-400 border-blue-500/20">${item.market}</span>
+                  <span class="font-bold text-xs truncate group-hover:text-blue-400">${item.name}</span>
+                  <span class="text-xs font-mono opacity-50">${item.symbol}</span>
+                </div>
+                <span class="px-2.5 py-1 rounded bg-blue-600 text-white text-xs font-semibold group-hover:bg-blue-500">
+                  + 加自选并看图
+                </span>
               </div>
-              <span class="px-2.5 py-1 rounded bg-blue-600 text-white text-xs font-semibold group-hover:bg-blue-500">
-                + 加自选并看图
-              </span>
-            </div>
-          `).join('');
+            `).join('');
+          }
+        } catch (err) {
+          searchDropdown.innerHTML = `<div class="p-3 text-center text-xs text-red-400">搜索请求异常，请重试</div>`;
         }
         searchDropdown.classList.remove('hidden');
-      }, 150);
+      }, 180);
     });
 
     document.addEventListener('click', e => {
@@ -1331,6 +1450,12 @@ async function sendStockToDSHChat(symbol, name, autoSend = false) {
   if (aiData && aiData.prompt_report) {
     promptText = aiData.prompt_report;
   } else {
+    let newsList = [];
+    try {
+      const nData = await fetchCachedNews(symbol, name);
+      newsList = nData?.news || [];
+    } catch (_) {}
+
     const isUp = (quote.change || 0) >= 0;
     const sign = isUp ? '+' : '';
     promptText = `【${name} (${symbol}) 股票实时投研诊断与交易决策咨询】
@@ -1339,7 +1464,7 @@ async function sendStockToDSHChat(symbol, name, autoSend = false) {
 - 最高 / 最低: ¥${quote.high?.toFixed(2) || '--'} / ¥${quote.low?.toFixed(2) || '--'}
 - 换手率: ${quote.turnover_rate ? quote.turnover_rate.toFixed(2) + '%' : '--'}，成交额: ${quote.turnover ? '¥' + (quote.turnover / 100000000).toFixed(2) + '亿' : '--'}
 - 市盈率(PE): ${quote.pe_ratio?.toFixed(1) || '--'}，市净率(PB): ${quote.pb_ratio?.toFixed(1) || '--'}，总市值: ${quote.market_cap ? quote.market_cap.toFixed(0) + '亿' : '--'}
-
+${newsList.length > 0 ? `\n最新资讯动态 (附源链接):\n${newsList.slice(0, 3).map((n, i) => `${i+1}. [${n.media}] [${n.title}](${n.url})`).join('\n')}\n` : ''}
 请结合以上实时行情盘口与量化特征，深度分析：
 1. 短线走势与多空动能（阻力位、支撑位、止损位设定）；
 2. 中长线基本面估值与行业景气度评估；
@@ -1772,7 +1897,7 @@ function openBatchTiled() {
   top4.forEach((item) => {
     openChart(item.symbol, item.name, item.market);
   });
-  applyWindowLayout('grid_4');
+  applyWindowLayout('tile_auto');
 }
 
 function closeWindow(id) {
@@ -1890,14 +2015,22 @@ function applyWindowLayout(mode) {
       win.width = w; win.height = h;
     });
   } else if (mode === 'tile_auto') {
-    let cols = activeWins.length <= 2 ? activeWins.length : (activeWins.length <= 4 ? 2 : 3);
-    let rows = Math.ceil(activeWins.length / cols);
+    // 默认竖列排列（纵向通顶长条、横向并排）：股票盘口与技术指标自上而下阅读，竖向占满全屏高，横向平分宽度
+    const count = activeWins.length || 1;
+    // 优先单行全高竖列铺开；若窗口过多且单列过窄 (<260px) 则自适应换行
+    let cols = count;
+    let rows = 1;
+    if (count > 2 && Math.floor((availW - padding * (count - 1)) / count) < 260) {
+      cols = Math.ceil(count / 2);
+      rows = 2;
+    }
     const w = Math.floor((availW - padding * (cols - 1)) / cols);
-    const h = Math.floor((availH - padding * (rows - 1)) / rows);
+    const h = rows === 1 ? availH : Math.floor((availH - padding * (rows - 1)) / rows);
     activeWins.forEach((win, i) => {
       win.x = padding + (i % cols) * (w + padding);
       win.y = topOffset + padding + Math.floor(i / cols) * (h + padding);
-      win.width = w; win.height = h;
+      win.width = w;
+      win.height = h;
     });
   } else if (mode === 'cascade') {
     activeWins.forEach((win, i) => {
