@@ -47,6 +47,38 @@ function saveSettings() {
 
 loadSettings();
 
+// 个人持仓与价格预警数据管理
+let userPortfolio = {};
+let userAlerts = {};
+let alertedSessionKeys = new Set();
+let activeModalState = {
+  type: null, // 'portfolio' | 'alert'
+  symbol: '',
+  name: '',
+  curPrice: 0
+};
+
+function loadPortfolioAndAlerts() {
+  try {
+    userPortfolio = JSON.parse(localStorage.getItem('omnistock_portfolio') || '{}');
+    userAlerts = JSON.parse(localStorage.getItem('omnistock_alerts') || '{}');
+  } catch (_) {}
+}
+
+function savePortfolio() {
+  try {
+    localStorage.setItem('omnistock_portfolio', JSON.stringify(userPortfolio));
+  } catch (_) {}
+}
+
+function saveAlerts() {
+  try {
+    localStorage.setItem('omnistock_alerts', JSON.stringify(userAlerts));
+  } catch (_) {}
+}
+
+loadPortfolioAndAlerts();
+
 // 统一涨跌配色计算工具
 function getTrendColor(isUp) {
   if (appSettings.colorScheme === 'green-up') {
@@ -288,6 +320,11 @@ function toggleTheme() {
 
 function updateSetting(key, val) {
   appSettings[key] = val;
+  if (key === 'theme') {
+    theme = val;
+    localStorage.setItem('omnistock_theme', theme);
+    applyThemeAndFont();
+  }
   saveSettings();
   if (key === 'refreshInterval') {
     resetPollingTimer();
@@ -296,7 +333,13 @@ function updateSetting(key, val) {
   updateRibbonDOM();
   updateOpenChartsQuotes();
   floatingWindows.forEach(w => {
-    if (w.period !== 'f10' && w.period !== 'news' && w.period !== 'ai') {
+    if (w.period === 'f10') {
+      renderF10(w);
+    } else if (w.period === 'news') {
+      renderNews(w);
+    } else if (w.period === 'ai') {
+      renderAIAnalysis(w);
+    } else {
       renderChart(w);
     }
   });
@@ -527,12 +570,193 @@ async function refreshData() {
   }
 }
 
+function checkPriceAlerts() {
+  watchlist.forEach(q => {
+    const alert = userAlerts[q.symbol.toLowerCase()];
+    if (!alert || !q.current_price) return;
+    const sym = q.symbol.toLowerCase();
+
+    if (alert.highPrice && q.current_price >= alert.highPrice) {
+      const key = `${sym}_high_${alert.highPrice}`;
+      if (!alertedSessionKeys.has(key)) {
+        alertedSessionKeys.add(key);
+        showToast(`🚨【${q.name}】突破预警！现价 ¥${q.current_price.toFixed(2)} 已达目标价 ¥${alert.highPrice}`);
+      }
+    }
+    if (alert.lowPrice && q.current_price <= alert.lowPrice) {
+      const key = `${sym}_low_${alert.lowPrice}`;
+      if (!alertedSessionKeys.has(key)) {
+        alertedSessionKeys.add(key);
+        showToast(`🚨【${q.name}】止损预警！现价 ¥${q.current_price.toFixed(2)} 已跌破预警价 ¥${alert.lowPrice}`);
+      }
+    }
+    if (alert.pctThreshold && Math.abs(q.change_pct || 0) >= alert.pctThreshold) {
+      const key = `${sym}_pct_${alert.pctThreshold}`;
+      if (!alertedSessionKeys.has(key)) {
+        alertedSessionKeys.add(key);
+        showToast(`⚡【${q.name}】日内大幅异动！涨跌幅已达 ${(q.change_pct >= 0 ? '+' : '') + q.change_pct.toFixed(2)}%`);
+      }
+    }
+  });
+}
+
+function renderPortfolioSummaryCard() {
+  const isDark = theme === 'dark';
+  const symbols = Object.keys(userPortfolio);
+  if (symbols.length === 0) return '';
+
+  let totalMarketValue = 0;
+  let totalCost = 0;
+  let todayProfit = 0;
+
+  symbols.forEach(sym => {
+    const pos = userPortfolio[sym];
+    const quote = watchlist.find(w => w.symbol.toLowerCase() === sym.toLowerCase()) || {};
+    const price = quote.current_price || pos.costPrice;
+    const prev = quote.prev_close || price;
+    const curVal = price * pos.shares;
+    const costVal = pos.costPrice * pos.shares;
+    totalMarketValue += curVal;
+    totalCost += costVal;
+    todayProfit += (price - prev) * pos.shares;
+  });
+
+  const totalProfit = totalMarketValue - totalCost;
+  const totalProfitRate = totalCost > 0 ? (totalProfit / totalCost) * 100 : 0;
+  const isProfitable = totalProfit >= 0;
+  const isTodayUp = todayProfit >= 0;
+
+  return `
+    <div class="px-3.5 py-2.5 mx-2.5 my-1.5 rounded-xl border flex flex-col gap-1.5 text-xs select-none shadow-sm ${
+      isDark ? 'bg-slate-800/80 border-slate-700 text-slate-200' : 'bg-blue-50/70 border-blue-200/80 text-slate-800'
+    }">
+      <div class="flex items-center justify-between font-bold">
+        <span class="flex items-center gap-1 text-blue-500 font-extrabold">💼 个人持仓总览</span>
+        <span class="text-[11px] opacity-70">共 ${symbols.length} 只标的</span>
+      </div>
+      <div class="grid grid-cols-3 gap-2 font-mono pt-1 border-t ${isDark ? 'border-slate-700/60' : 'border-blue-200/60'}">
+        <div>
+          <span class="text-[10px] block opacity-60">持仓总市值</span>
+          <span class="font-bold text-xs">¥${(totalMarketValue / 10000).toFixed(2)}万</span>
+        </div>
+        <div>
+          <span class="text-[10px] block opacity-60">今日盈亏</span>
+          <span class="font-bold text-xs ${getTrendTextClass(isTodayUp)}">${isTodayUp ? '+' : ''}¥${todayProfit.toFixed(0)}</span>
+        </div>
+        <div>
+          <span class="text-[10px] block opacity-60">累计总浮盈</span>
+          <span class="font-bold text-xs ${getTrendTextClass(isProfitable)}">${isProfitable ? '+' : ''}¥${totalProfit.toFixed(0)} (${totalProfitRate >= 0 ? '+' : ''}${totalProfitRate.toFixed(1)}%)</span>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function openPortfolioModal(symbol, name, curPrice) {
+  activeModalState = { type: 'portfolio', symbol: symbol.toLowerCase(), name, curPrice };
+  const modal = document.getElementById('omni-portfolio-modal');
+  if (modal) {
+    const pos = userPortfolio[symbol.toLowerCase()] || {};
+    document.getElementById('portfolio-modal-title').textContent = `💼 【${name} (${symbol})】持仓记账`;
+    document.getElementById('portfolio-cost-input').value = pos.costPrice || curPrice || '';
+    document.getElementById('portfolio-shares-input').value = pos.shares || '';
+    modal.classList.remove('hidden');
+  }
+}
+
+function closePortfolioModal() {
+  activeModalState.type = null;
+  const modal = document.getElementById('omni-portfolio-modal');
+  if (modal) modal.classList.add('hidden');
+}
+
+function savePortfolioPosition() {
+  const sym = activeModalState.symbol;
+  if (!sym) return;
+  const cost = parseFloat(document.getElementById('portfolio-cost-input').value);
+  const shares = parseInt(document.getElementById('portfolio-shares-input').value);
+
+  if (isNaN(cost) || isNaN(shares) || shares <= 0) {
+    showToast('⚠️ 请输入合法的成本价与持有股数');
+    return;
+  }
+
+  userPortfolio[sym] = { costPrice: cost, shares: shares };
+  savePortfolio();
+  closePortfolioModal();
+  updateWatchlistDOM();
+  showToast(`✅ 已更新【${activeModalState.name}】持仓信息！`);
+}
+
+function deletePortfolioPosition() {
+  const sym = activeModalState.symbol;
+  if (!sym) return;
+  delete userPortfolio[sym];
+  savePortfolio();
+  closePortfolioModal();
+  updateWatchlistDOM();
+  showToast(`🗑️ 已清除【${activeModalState.name}】持仓记账！`);
+}
+
+function openAlertModal(symbol, name, curPrice) {
+  activeModalState = { type: 'alert', symbol: symbol.toLowerCase(), name, curPrice };
+  const modal = document.getElementById('omni-alert-modal');
+  if (modal) {
+    const alert = userAlerts[symbol.toLowerCase()] || {};
+    document.getElementById('alert-modal-title').textContent = `🔔 【${name} (${symbol})】价格预警设置`;
+    document.getElementById('alert-high-input').value = alert.highPrice || '';
+    document.getElementById('alert-low-input').value = alert.lowPrice || '';
+    document.getElementById('alert-pct-input').value = alert.pctThreshold || '';
+    modal.classList.remove('hidden');
+  }
+}
+
+function closeAlertModal() {
+  activeModalState.type = null;
+  const modal = document.getElementById('omni-alert-modal');
+  if (modal) modal.classList.add('hidden');
+}
+
+function saveAlertRule() {
+  const sym = activeModalState.symbol;
+  if (!sym) return;
+  const high = parseFloat(document.getElementById('alert-high-input').value) || null;
+  const low = parseFloat(document.getElementById('alert-low-input').value) || null;
+  const pct = parseFloat(document.getElementById('alert-pct-input').value) || null;
+
+  if (!high && !low && !pct) {
+    delete userAlerts[sym];
+    saveAlerts();
+    closeAlertModal();
+    updateWatchlistDOM();
+    showToast(`🗑️ 已取消【${activeModalState.name}】预警`);
+    return;
+  }
+
+  userAlerts[sym] = { highPrice: high, lowPrice: low, pctThreshold: pct };
+  saveAlerts();
+  closeAlertModal();
+  updateWatchlistDOM();
+  showToast(`✅ 已设置【${activeModalState.name}】价格异动预警！`);
+}
+
+function deleteAlertRule() {
+  const sym = activeModalState.symbol;
+  if (!sym) return;
+  delete userAlerts[sym];
+  saveAlerts();
+  closeAlertModal();
+  updateWatchlistDOM();
+  showToast(`🗑️ 已清除【${activeModalState.name}】预警规则！`);
+}
+
 let isRefreshing = false;
 async function refreshQuotesOnly() {
   if (isRefreshing) return;
   isRefreshing = true;
   try {
     await refreshData();
+    checkPriceAlerts();
     updateWatchlistDOM();
     updateRibbonDOM();
     updateOpenChartsQuotes();
@@ -577,6 +801,11 @@ function updateWatchlistDOM() {
     isDark ? 'bg-slate-900 divide-slate-800 text-slate-100' : 'bg-white divide-slate-100 text-slate-800'
   }`;
 
+  const summaryEl = document.getElementById('portfolio-summary-slot');
+  if (summaryEl) {
+    summaryEl.innerHTML = renderPortfolioSummaryCard();
+  }
+
   const displayList = getFilteredAndSortedWatchlist();
 
   if (displayList.length === 0) {
@@ -588,6 +817,21 @@ function updateWatchlistDOM() {
     const isUp = (item.change || 0) >= 0;
     const color = getTrendTextClass(isUp);
     const sign = isUp ? '+' : '';
+    const pos = userPortfolio[item.symbol.toLowerCase()];
+    const alert = userAlerts[item.symbol.toLowerCase()];
+
+    let posHtml = '';
+    if (pos) {
+      const curPrice = item.current_price || pos.costPrice;
+      const profit = (curPrice - pos.costPrice) * pos.shares;
+      const pRate = pos.costPrice > 0 ? (profit / (pos.costPrice * pos.shares)) * 100 : 0;
+      const isPosUp = profit >= 0;
+      posHtml = `
+        <div class="text-[10px] font-mono font-semibold mt-0.5 ${getTrendTextClass(isPosUp)}">
+          持 ${pos.shares}股 · 浮盈: ${profit >= 0 ? '+' : ''}¥${profit.toFixed(0)} (${pRate >= 0 ? '+' : ''}${pRate.toFixed(1)}%)
+        </div>
+      `;
+    }
 
     return `
       <div class="px-3.5 py-2.5 flex items-center justify-between gap-2 transition-colors group ${
@@ -600,8 +844,12 @@ function updateWatchlistDOM() {
             'bg-amber-500/10 text-amber-500 border-amber-500/20'
           }">${item.market || 'A'}</span>
           <div class="truncate">
-            <div class="font-bold text-sm group-hover:text-blue-500 transition-colors truncate ${isDark ? 'text-slate-100' : 'text-slate-900'}">${item.name}</div>
+            <div class="flex items-center gap-1.5 truncate">
+              <span class="font-bold text-sm group-hover:text-blue-500 transition-colors truncate ${isDark ? 'text-slate-100' : 'text-slate-900'}">${item.name}</span>
+              ${alert ? `<span class="text-[10px] text-amber-400" title="已设置预警">🔔</span>` : ''}
+            </div>
             <div class="text-xs font-mono opacity-60 ${isDark ? 'text-slate-400' : 'text-slate-500'}">${item.symbol}</div>
+            ${posHtml}
           </div>
         </div>
 
@@ -615,6 +863,16 @@ function updateWatchlistDOM() {
         </div>
 
         <div class="flex items-center gap-1 ml-1 flex-shrink-0">
+          <button onclick="openPortfolioModal('${item.symbol}', '${item.name}', ${item.current_price || 0})"
+            class="p-1.5 rounded-lg ${pos ? 'bg-blue-600/20 text-blue-400 font-bold' : (isDark ? 'hover:bg-slate-800 text-slate-400' : 'hover:bg-slate-100 text-slate-500')} transition-all"
+            title="持仓记账与收益追踪">
+            💼
+          </button>
+          <button onclick="openAlertModal('${item.symbol}', '${item.name}', ${item.current_price || 0})"
+            class="p-1.5 rounded-lg ${alert ? 'bg-amber-500/20 text-amber-400 font-bold' : (isDark ? 'hover:bg-slate-800 text-slate-400' : 'hover:bg-slate-100 text-slate-500')} transition-all"
+            title="设置价格突破与异动预警">
+            🔔
+          </button>
           <button onclick="sendStockToDSHChat('${item.symbol}', '${item.name}', false)"
             class="p-1.5 rounded-lg bg-indigo-600/15 hover:bg-indigo-600 text-indigo-400 hover:text-white transition-all shadow-sm flex items-center justify-center text-xs"
             title="一键发送该股票投研数据到 DSH 聊天框">
@@ -816,6 +1074,9 @@ function renderInitialApp() {
           </div>
         </div>
 
+        <!-- 个人持仓总览卡片插槽 -->
+        <div id="portfolio-summary-slot"></div>
+
         <!-- 自选股票列表 (实色底色，不透明) -->
         <div id="watchlist-items-container" class="flex-1 overflow-y-auto divide-y max-h-[300px] ${
           isDark ? 'bg-slate-900 divide-slate-800' : 'bg-white divide-slate-100'
@@ -845,47 +1106,79 @@ function renderInitialApp() {
         </div>
 
         <div class="p-5 overflow-y-auto space-y-5 text-xs">
-          <!-- 1. 涨跌配色习惯 -->
+          <!-- 1. 主题外观风格 -->
+          <div class="space-y-2">
+            <label class="font-bold text-sm text-blue-500 block">🌓 视觉主题风格</label>
+            <div class="grid grid-cols-2 gap-3">
+              <div onclick="updateSetting('theme', 'dark')" class="p-3 rounded-xl border cursor-pointer flex items-center justify-between transition-all ${
+                theme === 'dark' ? 'border-blue-500 bg-blue-500/10 font-bold ring-1 ring-blue-500' : (isDark ? 'border-slate-800 bg-slate-950/40 hover:border-slate-700' : 'border-slate-200 bg-slate-50')
+              }">
+                <div class="flex items-center gap-2.5">
+                  <span class="text-base">🌙</span>
+                  <div>
+                    <div class="font-bold">极客深色暗黑</div>
+                    <div class="text-[10px] opacity-60">夜间专注护眼，高对比专业质感</div>
+                  </div>
+                </div>
+                <span class="w-2.5 h-2.5 rounded-full ${theme === 'dark' ? 'bg-blue-500 ring-2 ring-blue-400/40' : 'bg-slate-700'}"></span>
+              </div>
+
+              <div onclick="updateSetting('theme', 'light')" class="p-3 rounded-xl border cursor-pointer flex items-center justify-between transition-all ${
+                theme === 'light' ? 'border-blue-500 bg-blue-500/10 font-bold ring-1 ring-blue-500' : (isDark ? 'border-slate-800 bg-slate-950/40 hover:border-slate-700' : 'border-slate-200 bg-slate-50')
+              }">
+                <div class="flex items-center gap-2.5">
+                  <span class="text-base">☀️</span>
+                  <div>
+                    <div class="font-bold">清爽高雅亮白</div>
+                    <div class="text-[10px] opacity-60">明亮通透清晰，白天办公首选</div>
+                  </div>
+                </div>
+                <span class="w-2.5 h-2.5 rounded-full ${theme === 'light' ? 'bg-blue-500 ring-2 ring-blue-400/40' : 'bg-slate-300'}"></span>
+              </div>
+            </div>
+          </div>
+
+          <!-- 2. 涨跌配色习惯 -->
           <div class="space-y-2">
             <label class="font-bold text-sm text-blue-500 block">🎨 涨跌配色习惯</label>
             <div class="grid grid-cols-2 gap-3">
               <div onclick="updateSetting('colorScheme', 'red-up')" class="p-3 rounded-xl border cursor-pointer flex items-center justify-between transition-all ${
                 appSettings.colorScheme === 'red-up' ? 'border-blue-500 bg-blue-500/10 font-bold ring-1 ring-blue-500' : (isDark ? 'border-slate-800 bg-slate-950/40 hover:border-slate-700' : 'border-slate-200 bg-slate-50')
               }">
-                <div class="flex items-center gap-2">
-                  <span class="text-sm">🇨🇳</span>
-                  <div>
-                    <div class="font-bold">红涨绿跌</div>
-                    <div class="text-[11px] opacity-60">中国 A股 / 港股惯例</div>
-                  </div>
+                <div>
+                  <div class="font-bold">🇨🇳 红涨绿跌</div>
+                  <div class="text-[10px] opacity-60">中国 A 股 / 港股标准习惯</div>
                 </div>
-                <span class="text-red-500 font-bold">+3.8%</span>
+                <div class="flex items-center gap-1 font-mono font-bold">
+                  <span class="text-red-500">+2.5%</span>
+                  <span class="text-emerald-500">-1.8%</span>
+                </div>
               </div>
 
               <div onclick="updateSetting('colorScheme', 'green-up')" class="p-3 rounded-xl border cursor-pointer flex items-center justify-between transition-all ${
-                appSettings.colorScheme === 'green-up' ? 'border-blue-500 bg-blue-500/10 font-bold ring-1 ring-blue-500' : (isDark ? 'border-slate-800 bg-slate-950/40 hover:border-slate-700' : 'border-slate-200 bg-slate-50')
+                appSettings.colorScheme === 'green-up' ? 'border-emerald-500 bg-emerald-500/10 font-bold ring-1 ring-emerald-500' : (isDark ? 'border-slate-800 bg-slate-950/40 hover:border-slate-700' : 'border-slate-200 bg-slate-50')
               }">
-                <div class="flex items-center gap-2">
-                  <span class="text-sm">🌐</span>
-                  <div>
-                    <div class="font-bold">绿涨红跌</div>
-                    <div class="text-[11px] opacity-60">美股 / 国际金融惯例</div>
-                  </div>
+                <div>
+                  <div class="font-bold">🌐 绿涨红跌</div>
+                  <div class="text-[10px] opacity-60">美股 / 加密货币国际标准</div>
                 </div>
-                <span class="text-emerald-500 font-bold">+3.8%</span>
+                <div class="flex items-center gap-1 font-mono font-bold">
+                  <span class="text-emerald-500">+2.5%</span>
+                  <span class="text-red-500">-1.8%</span>
+                </div>
               </div>
             </div>
           </div>
 
-          <!-- 2. 行情刷新频率 -->
+          <!-- 2. 行情轮询频率 -->
           <div class="space-y-2">
             <label class="font-bold text-sm text-blue-500 block">⏱️ 行情自动刷新频率</label>
-            <div class="grid grid-cols-4 gap-2">
+            <div class="grid grid-cols-4 gap-2 font-mono">
               ${[
-                { val: 2000, label: '2秒 (极速)' },
-                { val: 3000, label: '3秒 (标准)' },
-                { val: 5000, label: '5秒 (省流)' },
-                { val: 10000, label: '10秒' }
+                { ms: 2000, label: '2秒 (极速)' },
+                { ms: 3000, label: '3秒 (标准)' },
+                { ms: 5000, label: '5秒 (省流)' },
+                { ms: 10000, label: '10秒' }
               ].map(opt => `
                 <button onclick="updateSetting('refreshInterval', ${opt.val})" class="py-2 rounded-xl border text-center font-semibold transition-all ${
                   appSettings.refreshInterval === opt.val
@@ -930,6 +1223,68 @@ function renderInitialApp() {
           <button onclick="closeSettingsModal()" class="px-5 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs shadow-md">
             完成
           </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 3. 持仓记账模态框 -->
+    <div id="omni-portfolio-modal" class="hidden fixed inset-0 z-[999999] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+      <div class="w-full max-w-sm rounded-2xl border shadow-2xl overflow-hidden flex flex-col ${
+        isDark ? 'bg-slate-900 border-slate-700 text-slate-100' : 'bg-white border-slate-300 text-slate-800'
+      }">
+        <div class="px-5 py-3.5 border-b flex items-center justify-between ${isDark ? 'bg-slate-800/80 border-slate-700' : 'bg-slate-100 border-slate-200'}">
+          <div id="portfolio-modal-title" class="font-bold text-sm text-blue-500">💼 持仓记账</div>
+          <button onclick="closePortfolioModal()" class="p-1 rounded-lg hover:bg-red-500/20 text-slate-400 hover:text-red-500 font-bold">✕</button>
+        </div>
+        <div class="p-5 space-y-4 text-xs">
+          <div>
+            <label class="block font-semibold mb-1 opacity-80">买入成本均价 (¥ / 股):</label>
+            <input id="portfolio-cost-input" type="number" step="0.01" placeholder="如 1350.00" class="w-full px-3 py-2 border rounded-xl font-mono focus:outline-none focus:border-blue-500 ${isDark ? 'bg-slate-800 border-slate-700' : 'bg-slate-50 border-slate-300'}" />
+          </div>
+          <div>
+            <label class="block font-semibold mb-1 opacity-80">持股数量 (股):</label>
+            <input id="portfolio-shares-input" type="number" step="100" placeholder="如 1000" class="w-full px-3 py-2 border rounded-xl font-mono focus:outline-none focus:border-blue-500 ${isDark ? 'bg-slate-800 border-slate-700' : 'bg-slate-50 border-slate-300'}" />
+          </div>
+          <div class="flex items-center justify-between gap-3 pt-2">
+            <button onclick="deletePortfolioPosition()" class="px-3 py-2 rounded-xl text-red-400 hover:bg-red-500/15 font-semibold transition-all">清除持仓</button>
+            <div class="flex items-center gap-2">
+              <button onclick="closePortfolioModal()" class="px-3.5 py-2 rounded-xl border ${isDark ? 'border-slate-700 hover:bg-slate-800' : 'border-slate-300 hover:bg-slate-100'}">取消</button>
+              <button onclick="savePortfolioPosition()" class="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-bold shadow-md shadow-blue-500/25">保存记录</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 4. 价格异动预警模态框 -->
+    <div id="omni-alert-modal" class="hidden fixed inset-0 z-[999999] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+      <div class="w-full max-w-sm rounded-2xl border shadow-2xl overflow-hidden flex flex-col ${
+        isDark ? 'bg-slate-900 border-slate-700 text-slate-100' : 'bg-white border-slate-300 text-slate-800'
+      }">
+        <div class="px-5 py-3.5 border-b flex items-center justify-between ${isDark ? 'bg-slate-800/80 border-slate-700' : 'bg-slate-100 border-slate-200'}">
+          <div id="alert-modal-title" class="font-bold text-sm text-amber-400">🔔 价格异动预警设置</div>
+          <button onclick="closeAlertModal()" class="p-1 rounded-lg hover:bg-red-500/20 text-slate-400 hover:text-red-500 font-bold">✕</button>
+        </div>
+        <div class="p-5 space-y-4 text-xs">
+          <div>
+            <label class="block font-semibold mb-1 opacity-80">突破上限目标价 (¥，向上触发):</label>
+            <input id="alert-high-input" type="number" step="0.01" placeholder="如 1500.00" class="w-full px-3 py-2 border rounded-xl font-mono focus:outline-none focus:border-amber-500 ${isDark ? 'bg-slate-800 border-slate-700' : 'bg-slate-50 border-slate-300'}" />
+          </div>
+          <div>
+            <label class="block font-semibold mb-1 opacity-80">跌破止损警戒价 (¥，向下触发):</label>
+            <input id="alert-low-input" type="number" step="0.01" placeholder="如 1280.00" class="w-full px-3 py-2 border rounded-xl font-mono focus:outline-none focus:border-amber-500 ${isDark ? 'bg-slate-800 border-slate-700' : 'bg-slate-50 border-slate-300'}" />
+          </div>
+          <div>
+            <label class="block font-semibold mb-1 opacity-80">单日异动涨跌幅阈值 (%，如 ±5%):</label>
+            <input id="alert-pct-input" type="number" step="0.5" placeholder="如 5.0" class="w-full px-3 py-2 border rounded-xl font-mono focus:outline-none focus:border-amber-500 ${isDark ? 'bg-slate-800 border-slate-700' : 'bg-slate-50 border-slate-300'}" />
+          </div>
+          <div class="flex items-center justify-between gap-3 pt-2">
+            <button onclick="deleteAlertRule()" class="px-3 py-2 rounded-xl text-red-400 hover:bg-red-500/15 font-semibold transition-all">清除预警</button>
+            <div class="flex items-center gap-2">
+              <button onclick="closeAlertModal()" class="px-3.5 py-2 rounded-xl border ${isDark ? 'border-slate-700 hover:bg-slate-800' : 'border-slate-300 hover:bg-slate-100'}">取消</button>
+              <button onclick="saveAlertRule()" class="px-4 py-2 rounded-xl bg-amber-600 hover:bg-amber-500 text-white font-bold shadow-md shadow-amber-500/25">保存预警</button>
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -1058,6 +1413,9 @@ function renderSingleWindowHtml(win) {
         </div>
 
         <div class="flex items-center gap-2">
+          <button onclick="openAlertModal('${win.symbol}', '${win.name}', ${quote.current_price || 0})" class="px-2 py-1 rounded-lg ${userAlerts[win.symbol.toLowerCase()] ? 'bg-amber-500/20 text-amber-400 font-bold border border-amber-500/30' : (isDark ? 'hover:bg-slate-700 text-slate-400 hover:text-white' : 'hover:bg-slate-200 text-slate-500')} text-xs flex items-center gap-1 transition-all" title="设置价格突破/跌破/异动预警">
+            <span>🔔 预警</span>
+          </button>
           <button onclick="sendStockToDSHChat('${win.symbol}', '${win.name}', false)" class="px-2.5 py-1 rounded-lg bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-bold text-xs shadow-md shadow-blue-500/20 flex items-center gap-1 transition-all hover:scale-105" title="一键将该股票全景数据与投研提问填入 DSH 聊天框">
             <span>💬 发送到聊天</span>
           </button>
@@ -1101,8 +1459,15 @@ function renderSingleWindowHtml(win) {
       </div>
 
       <!-- 图表 / F10 / 资讯 / AI分析 专属容器 -->
-      <div id="chart-container-${win.id}" class="flex-1 p-2.5 relative overflow-y-auto ${isDark ? 'bg-slate-950/40' : 'bg-slate-50/50'}">
-        <div id="chart-${win.id}" class="w-full h-full ${win.period === 'f10' || win.period === 'news' || win.period === 'ai' ? 'hidden' : ''}"></div>
+      <div id="chart-container-${win.id}" class="flex-1 p-2.5 relative overflow-y-auto flex flex-col ${isDark ? 'bg-slate-950/40' : 'bg-slate-50/50'}">
+        <!-- 实时 HUD 数据状态栏 (随十字光标高频跳动) -->
+        <div id="hud-bar-${win.id}" class="px-3 py-1 mb-1.5 rounded-lg border text-[11px] font-mono flex items-center justify-between gap-2 overflow-x-auto select-none transition-all ${
+          isDark ? 'bg-slate-900/90 border-slate-800 text-slate-300' : 'bg-white border-slate-200 text-slate-700 shadow-sm'
+        } ${win.period === 'f10' || win.period === 'news' || win.period === 'ai' ? 'hidden' : ''}">
+          <span class="opacity-70 text-[10px]">✨ 移动十字光标查看各周期量化指标动态</span>
+        </div>
+
+        <div id="chart-${win.id}" class="w-full flex-1 ${win.period === 'f10' || win.period === 'news' || win.period === 'ai' ? 'hidden' : ''}"></div>
         <div id="f10-container-${win.id}" class="space-y-3.5 leading-relaxed ${win.period !== 'f10' ? 'hidden' : ''}"></div>
         <div id="news-container-${win.id}" class="space-y-3.5 leading-relaxed ${win.period !== 'news' ? 'hidden' : ''}"></div>
         <div id="ai-container-${win.id}" class="space-y-3.5 leading-relaxed ${win.period !== 'ai' ? 'hidden' : ''}"></div>
@@ -2324,11 +2689,143 @@ async function renderChart(win) {
         }],
         series: seriesList
       }, true);
+
+      // 默认呈现最新一根指标数据
+      updateChartHUD(win, bars, ind, bars.length - 1);
+
+      // 绑定十字光标 HUD 动态联动事件
+      win.chartInstance.off('updateAxisPointer');
+      win.chartInstance.on('updateAxisPointer', (event) => {
+        const dataIndex = event.dataInfo?.dataIndex ?? event.dataIndex;
+        if (dataIndex !== undefined && dataIndex >= 0 && dataIndex < bars.length) {
+          updateChartHUD(win, bars, ind, dataIndex);
+        }
+      });
+
+      const zr = win.chartInstance.getZr();
+      zr.off('mousemove');
+      zr.on('mousemove', (params) => {
+        const pointInPixel = [params.offsetX, params.offsetY];
+        if (win.chartInstance.containPixel({ gridIndex: 0 }, pointInPixel)) {
+          const pointInGrid = win.chartInstance.convertFromPixel({ seriesIndex: 0 }, pointInPixel);
+          const xIndex = pointInGrid ? Math.round(pointInGrid[0]) : -1;
+          if (xIndex >= 0 && xIndex < bars.length) {
+            updateChartHUD(win, bars, ind, xIndex);
+          }
+        }
+      });
+
+      zr.off('globalout');
+      zr.on('globalout', () => {
+        if (bars && bars.length > 0) {
+          updateChartHUD(win, bars, ind, bars.length - 1);
+        }
+      });
+    }
+
+    if (win.period === 'intraday') {
+      updateChartHUD(win, bars, null, bars.length - 1);
+
+      win.chartInstance.off('updateAxisPointer');
+      win.chartInstance.on('updateAxisPointer', (event) => {
+        const dataIndex = event.dataInfo?.dataIndex ?? event.dataIndex;
+        if (dataIndex !== undefined && dataIndex >= 0 && dataIndex < bars.length) {
+          updateChartHUD(win, bars, null, dataIndex);
+        }
+      });
+
+      const zr = win.chartInstance.getZr();
+      zr.off('mousemove');
+      zr.on('mousemove', (params) => {
+        const pointInPixel = [params.offsetX, params.offsetY];
+        if (win.chartInstance.containPixel({ gridIndex: 0 }, pointInPixel)) {
+          const pointInGrid = win.chartInstance.convertFromPixel({ seriesIndex: 0 }, pointInPixel);
+          const xIndex = pointInGrid ? Math.round(pointInGrid[0]) : -1;
+          if (xIndex >= 0 && xIndex < bars.length) {
+            updateChartHUD(win, bars, null, xIndex);
+          }
+        }
+      });
+
+      zr.off('globalout');
+      zr.on('globalout', () => {
+        if (bars && bars.length > 0) {
+          updateChartHUD(win, bars, null, bars.length - 1);
+        }
+      });
     }
   } catch (err) {
     console.error('Render chart error:', err);
     win.chartInstance.hideLoading();
   }
+}
+
+// 实时 HUD 数据状态栏动态更新函数
+function updateChartHUD(win, bars, ind, idx) {
+  const hudEl = document.getElementById(`hud-bar-${win.id}`);
+  if (!hudEl || !bars || bars.length === 0 || idx < 0 || idx >= bars.length) return;
+  const bar = bars[idx];
+
+  if (win.period === 'intraday') {
+    const isUp = (bar.change || (bar.close - (bars[0]?.open || bar.close))) >= 0;
+    const pColor = getTrendTextClass(isUp);
+    const timeStr = bar.time.includes(' ') ? bar.time.split(' ')[1] : bar.time;
+    const volStr = bar.volume ? (bar.volume >= 10000 ? (bar.volume / 10000).toFixed(1) + '万' : bar.volume) : '--';
+    const sign = (bar.change_pct || 0) >= 0 ? '+' : '';
+
+    hudEl.innerHTML = `
+      <div class="flex items-center gap-3 truncate w-full">
+        <span class="opacity-70 font-semibold">⏱️ ${timeStr}</span>
+        <span>现价: <b class="${pColor}">¥${bar.close.toFixed(2)}</b></span>
+        <span>均价: <b class="text-amber-500 font-semibold">¥${bar.avg_price ? bar.avg_price.toFixed(2) : bar.close.toFixed(2)}</b></span>
+        <span>涨跌: <b class="${pColor}">${sign}${(bar.change_pct || 0).toFixed(2)}%</b></span>
+        <span class="opacity-80">成交量: <b>${volStr}</b></span>
+      </div>
+    `;
+    return;
+  }
+
+  // K线周期
+  const isUp = bar.close >= bar.open;
+  const pColor = getTrendTextClass(isUp);
+  const prevClose = idx > 0 ? bars[idx - 1].close : bar.open;
+  const pct = prevClose > 0 ? ((bar.close - prevClose) / prevClose) * 100 : 0;
+  const sign = pct >= 0 ? '+' : '';
+  const dateStr = bar.time.includes(' ') ? bar.time.split(' ')[0] : bar.time;
+  const volStr = bar.volume ? (bar.volume >= 10000 ? (bar.volume / 10000).toFixed(1) + '万' : bar.volume) : '--';
+
+  let indParts = [];
+  if (win.mainIndicators && win.mainIndicators.includes('MA') && ind) {
+    if (ind.ma5?.[idx]) indParts.push(`<span class="text-amber-400">MA5:${ind.ma5[idx].toFixed(2)}</span>`);
+    if (ind.ma10?.[idx]) indParts.push(`<span class="text-cyan-400">MA10:${ind.ma10[idx].toFixed(2)}</span>`);
+    if (ind.ma20?.[idx]) indParts.push(`<span class="text-purple-400">MA20:${ind.ma20[idx].toFixed(2)}</span>`);
+  }
+  if (win.mainIndicators && win.mainIndicators.includes('BOLL') && ind) {
+    if (ind.bollMid?.[idx]) indParts.push(`<span class="text-blue-400">MID:${ind.bollMid[idx].toFixed(2)}</span>`);
+  }
+  if (win.subIndicators && win.subIndicators.includes('MACD') && ind && ind.dif?.[idx] !== undefined) {
+    const macdVal = ind.macdBar?.[idx] || 0;
+    indParts.push(`<span class="${getTrendTextClass(macdVal >= 0)}">MACD:${macdVal.toFixed(2)}</span>`);
+  }
+  if (win.subIndicators && win.subIndicators.includes('KDJ') && ind && ind.kdjK?.[idx] !== undefined) {
+    indParts.push(`<span class="text-amber-400">K:${ind.kdjK[idx].toFixed(1)}</span>`);
+  }
+  if (win.subIndicators && win.subIndicators.includes('RSI') && ind && ind.rsi6?.[idx] !== undefined) {
+    indParts.push(`<span class="text-cyan-400">RSI6:${ind.rsi6[idx].toFixed(1)}</span>`);
+  }
+
+  hudEl.innerHTML = `
+    <div class="flex items-center gap-2 truncate w-full">
+      <span class="opacity-70 font-semibold">${dateStr}</span>
+      <span>开:<b class="${bar.open >= prevClose ? getTrendTextClass(true) : getTrendTextClass(false)}">${bar.open.toFixed(2)}</b></span>
+      <span>高:<b class="${getTrendTextClass(true)}">${bar.high.toFixed(2)}</b></span>
+      <span>低:<b class="${getTrendTextClass(false)}">${bar.low.toFixed(2)}</b></span>
+      <span>收:<b class="${pColor}">${bar.close.toFixed(2)}</b></span>
+      <span class="${pColor} font-bold">(${sign}${pct.toFixed(2)}%)</span>
+      <span class="opacity-80">量:<b>${volStr}</b></span>
+      ${indParts.length > 0 ? `<span class="opacity-30">|</span> ${indParts.join(' ')}` : ''}
+    </div>
+  `;
 }
 
 // 走势图窗口控制
@@ -2609,6 +3106,17 @@ if (typeof window !== 'undefined') {
     updateSetting,
     openSettingsModal,
     closeSettingsModal,
+    openPortfolioModal,
+    closePortfolioModal,
+    savePortfolioPosition,
+    deletePortfolioPosition,
+    openAlertModal,
+    closeAlertModal,
+    saveAlertRule,
+    deleteAlertRule,
+    updateChartHUD,
+    renderPortfolioSummaryCard,
+    checkPriceAlerts,
     setMarketTab,
     toggleSortWatchlist,
     toggleWindowDepth,
