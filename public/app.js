@@ -135,12 +135,12 @@ const clientInFlight = new Map();
 
 async function fetchCachedSectors() {
   const cached = memoryCache.sectors.get('all');
-  if (cached && (Date.now() - cached.timestamp < 15 * 1000)) {
+  if (cached && (Date.now() - cached.timestamp < 15 * 1000) && (cached.data.industry?.length > 0 || cached.data.concept?.length > 0)) {
     return cached.data;
   }
   try {
     const res = await fetch('/dsh-plugin-stock-x/sectors').then(r => r.json());
-    if (res.data) {
+    if (res.data && (res.data.industry?.length > 0 || res.data.concept?.length > 0)) {
       memoryCache.sectors.set('all', { data: res.data, timestamp: Date.now() });
       return res.data;
     }
@@ -150,12 +150,12 @@ async function fetchCachedSectors() {
 
 async function fetchCachedSectorStocks(code) {
   const cached = memoryCache.sectors.get(`stocks_${code}`);
-  if (cached && (Date.now() - cached.timestamp < 15 * 1000)) {
+  if (cached && (Date.now() - cached.timestamp < 15 * 1000) && cached.data?.length > 0) {
     return cached.data;
   }
   try {
     const res = await fetch(`/dsh-plugin-stock-x/sector-stocks?code=${code}`).then(r => r.json());
-    if (res.data) {
+    if (res.data && Array.isArray(res.data) && res.data.length > 0) {
       memoryCache.sectors.set(`stocks_${code}`, { data: res.data, timestamp: Date.now() });
       return res.data;
     }
@@ -166,12 +166,12 @@ async function fetchCachedSectorStocks(code) {
 async function fetchCachedFundFlow(symbol) {
   const key = symbol.toLowerCase();
   const cached = memoryCache.fundflow.get(key);
-  if (cached && (Date.now() - cached.timestamp < 30 * 1000)) {
+  if (cached && (Date.now() - cached.timestamp < 30 * 1000) && cached.data?.latest) {
     return cached.data;
   }
   try {
     const res = await fetch(`/dsh-plugin-stock-x/fund-flow/${symbol}`).then(r => r.json());
-    if (res.data) {
+    if (res.data && res.data.latest) {
       memoryCache.fundflow.set(key, { data: res.data, timestamp: Date.now() });
       return res.data;
     }
@@ -589,23 +589,22 @@ async function toggleWindowDepth(winId) {
   if (!win) return;
   win.showDepth = !win.showDepth;
 
-  if (win.showDepth) {
-    fetchCachedQuote(win.symbol).then(q => {
-      if (q) {
-        const depthPanel = document.getElementById(`depth-panel-${win.id}`);
-        if (depthPanel) {
-          depthPanel.outerHTML = renderDepthPanelHtml(win, q);
-        }
-      }
-    });
-  }
-
   const winEl = document.getElementById(win.id);
   if (winEl) {
     winEl.outerHTML = renderSingleWindowHtml(win);
     bindSingleWindowEvents(win);
-    if (win.period !== 'f10' && win.period !== 'news' && win.period !== 'ai') {
+    if (win.period !== 'f10' && win.period !== 'news' && win.period !== 'ai' && win.period !== 'fundflow' && win.period !== 'notes') {
       renderChart(win);
+    }
+  }
+
+  if (win.showDepth) {
+    const q = await fetchCachedQuote(win.symbol);
+    if (q && q.depth) {
+      const depthPanel = document.getElementById(`depth-panel-${win.id}`);
+      if (depthPanel) {
+        depthPanel.outerHTML = renderDepthPanelHtml(win, q);
+      }
     }
   }
 }
@@ -686,14 +685,15 @@ async function refreshData() {
       fetch('/dsh-plugin-stock-x/watchlist').then(r => r.json()),
       fetch('/dsh-plugin-stock-x/indices').then(r => r.json())
     ]);
-    if (wlRes.data) watchlist = wlRes.data;
-    if (idxRes.data) indices = idxRes.data;
+    if (wlRes.data && Array.isArray(wlRes.data)) watchlist = wlRes.data;
+    if (idxRes.data && Array.isArray(idxRes.data)) indices = idxRes.data;
   } catch (err) {
     console.error('Refresh error:', err);
   }
 }
 
 function checkPriceAlerts() {
+  if (!Array.isArray(watchlist)) return;
   watchlist.forEach(q => {
     const alert = userAlerts[q.symbol.toLowerCase()];
     if (!alert || !q.current_price) return;
@@ -1228,34 +1228,36 @@ function updateRibbonDOM() {
   }).join('');
 }
 
-function updateOpenChartsQuotes() {
-  floatingWindows.forEach(win => {
+async function updateOpenChartsQuotes() {
+  for (const win of floatingWindows) {
     const quote = watchlist.find(w => w.symbol.toLowerCase() === win.symbol.toLowerCase());
-    if (!quote) return;
     const winEl = document.getElementById(win.id);
-    if (!winEl) return;
-    const isUp = (quote.change || 0) >= 0;
+    if (!winEl) continue;
+    const curQuote = quote || await fetchCachedQuote(win.symbol);
+    if (!curQuote) continue;
+
+    const isUp = (curQuote.change || 0) >= 0;
     const color = getTrendTextClass(isUp);
     const sign = isUp ? '+' : '';
 
     const priceEl = winEl.querySelector('.quote-price');
     if (priceEl) {
-      priceEl.textContent = quote.current_price ? quote.current_price.toFixed(2) : '--';
+      priceEl.textContent = curQuote.current_price ? curQuote.current_price.toFixed(2) : '--';
       priceEl.className = `quote-price font-bold text-base ${color}`;
     }
     const pctEl = winEl.querySelector('.quote-pct');
     if (pctEl) {
-      pctEl.textContent = `${sign}${quote.change_pct ? quote.change_pct.toFixed(2) : '0.00'}%`;
+      pctEl.textContent = `${sign}${curQuote.change_pct ? curQuote.change_pct.toFixed(2) : '0.00'}%`;
       pctEl.className = `quote-pct font-bold text-base ${color}`;
     }
 
-    if (win.showDepth) {
+    if (win.showDepth && curQuote.depth) {
       const depthPanel = document.getElementById(`depth-panel-${win.id}`);
-      if (depthPanel && quote.depth) {
-        depthPanel.outerHTML = renderDepthPanelHtml(win, quote);
+      if (depthPanel) {
+        depthPanel.outerHTML = renderDepthPanelHtml(win, curQuote);
       }
     }
-  });
+  }
 }
 
 // 页面基础框架渲染
@@ -2218,6 +2220,10 @@ function bindSingleWindowEvents(win) {
     renderNews(win);
   } else if (win.period === 'ai') {
     renderAIAnalysis(win);
+  } else if (win.period === 'fundflow') {
+    renderFundFlow(win);
+  } else if (win.period === 'notes') {
+    renderNotes(win);
   } else {
     renderChart(win);
   }
@@ -2426,20 +2432,6 @@ async function renderNews(win) {
     container.innerHTML = `<div class="p-8 text-center text-sm text-red-400">加载资讯公告失败: ${e.message}</div>`;
   }
 }
-
-// 🌟 渲染全景 AI 智能量化与基本面深度研报诊断看板
-async function renderAIAnalysis(win) {
-  const chartEl = document.getElementById(`chart-${win.id}`);
-  const f10Container = document.getElementById(`f10-container-${win.id}`);
-  const newsContainer = document.getElementById(`news-container-${win.id}`);
-  const container = document.getElementById(`ai-container-${win.id}`);
-  if (!container) return;
-  const isDark = theme === 'dark';
-
-  if (chartEl) chartEl.classList.add('hidden');
-  if (f10Container) f10Container.classList.add('hidden');
-  if (newsContainer) newsContainer.classList.add('hidden');
-  container.classList.remove('hidden');
 
 // 🌊 渲染主力与散户资金流向面板
 async function renderFundFlow(win) {
@@ -3039,6 +3031,9 @@ async function renderChart(win) {
   }
 
   const isDark = theme === 'dark';
+  const isRedUp = appSettings.colorScheme !== 'green-up';
+  const upColor = isRedUp ? '#ef4444' : '#10b981';
+  const downColor = isRedUp ? '#10b981' : '#ef4444';
   const axisColor = isDark ? '#334155' : '#cbd5e1';
   const labelColor = isDark ? '#94a3b8' : '#64748b';
   const titleColor = isDark ? '#e2e8f0' : '#1e293b';
@@ -3122,8 +3117,29 @@ async function renderChart(win) {
           { left: '9%', right: '3%', top: '74%', height: '20%' }
         ],
         xAxis: [
-          { type: 'category', data: times, gridIndex: 0, axisLine: { lineStyle: { color: axisColor } }, axisLabel: { color: labelColor, fontSize: 11 } },
-          { type: 'category', data: times, gridIndex: 1, axisLine: { lineStyle: { color: axisColor } }, axisLabel: { show: false } }
+          { 
+            type: 'category', 
+            data: times, 
+            gridIndex: 0, 
+            axisLine: { lineStyle: { color: axisColor } }, 
+            axisLabel: { 
+              color: labelColor, 
+              fontSize: 11,
+              interval: (index, val) => {
+                if (win.period === '5day') {
+                  return val.endsWith('09:30') || index === 0;
+                }
+                return 'auto';
+              }
+            } 
+          },
+          { 
+            type: 'category', 
+            data: times, 
+            gridIndex: 1, 
+            axisLine: { lineStyle: { color: axisColor } }, 
+            axisLabel: { show: false } 
+          }
         ],
         yAxis: [
           { 
@@ -3147,9 +3163,40 @@ async function renderChart(win) {
         ],
         dataZoom: [{ type: 'inside', xAxisIndex: [0, 1], start: 0, end: 100 }],
         series: [
-          { name: '现价', type: 'line', data: prices, smooth: true, showSymbol: false, lineStyle: { color: '#3b82f6', width: 2.2 } },
+          { 
+            name: '现价', 
+            type: 'line', 
+            data: prices, 
+            smooth: true, 
+            showSymbol: false, 
+            lineStyle: { color: '#3b82f6', width: 2.2 },
+            areaStyle: {
+              color: {
+                type: 'linear',
+                x: 0, y: 0, x2: 0, y2: 1,
+                colorStops: [
+                  { offset: 0, color: 'rgba(59, 130, 246, 0.25)' },
+                  { offset: 1, color: 'rgba(59, 130, 246, 0.01)' }
+                ]
+              }
+            }
+          },
           ...(!isIndex ? [{ name: '分时均价', type: 'line', data: avgPrices, smooth: true, showSymbol: false, lineStyle: { color: '#f59e0b', width: 1.6, type: 'solid' } }] : []),
-          { name: '成交量', type: 'bar', xAxisIndex: 1, yAxisIndex: 1, data: volumes, itemStyle: { color: '#64748b' } }
+          { 
+            name: '成交量', 
+            type: 'bar', 
+            xAxisIndex: 1, 
+            yAxisIndex: 1, 
+            data: volumes, 
+            itemStyle: { 
+              color: (params) => {
+                const idx = params.dataIndex;
+                const pPrev = idx > 0 ? prices[idx - 1] : prices[idx];
+                const isUp = prices[idx] >= pPrev;
+                return isUp ? (isRedUp ? '#ef4444' : '#10b981') : (isRedUp ? '#10b981' : '#ef4444');
+              }
+            } 
+          }
         ]
       }, true);
     } else {

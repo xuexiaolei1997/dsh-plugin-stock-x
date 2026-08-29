@@ -245,7 +245,7 @@ function getEastmoneySecId(symbol) {
 }
 
 /**
- * 模糊拼音、代码与名称搜索股票 (支持腾讯 Smartbox 与 东财智能联想 双引擎，严密防空与去重)
+ * 模糊拼音、代码与名称搜索股票 (支持腾讯 Smartbox + 新浪 Suggest + 东财智能联想 三重引擎)
  */
 async function searchStock(keyword) {
   if (!keyword || !keyword.trim()) return [];
@@ -290,7 +290,45 @@ async function searchStock(keyword) {
     console.error('Tencent search error:', err.message);
   }
 
-  // 2. 备用：东财智能联想搜索 (补充港美股与中文模糊匹配)
+  // 2. 新浪 Suggest 引擎 (补充 A股/港股/美股/指数搜索)
+  if (results.length < 5) {
+    try {
+      const url = `https://suggest3.sinajs.cn/suggest/type=11,12,13,14,15,31,41&key=${encodeURIComponent(q)}`;
+      const res = await fetchWithTimeout(url, { headers: { 'User-Agent': 'Mozilla/5.0', 'Referer': 'https://finance.sina.com.cn' } }, 3000);
+      const arrayBuffer = await res.arrayBuffer();
+      const text = new TextDecoder('gb18030').decode(arrayBuffer);
+      const match = text.match(/var suggestvalue="([^"]+)";/);
+      if (match && match[1]) {
+        const rows = match[1].split(';').filter(Boolean);
+        for (const row of rows) {
+          const parts = row.split(',');
+          if (parts.length < 5) continue;
+          const name = parts[4] || parts[0];
+          const code = parts[2];
+          const sym = parts[3];
+          const fullCode = normalizeSymbol(sym || code);
+          if (fullCode && name && !seen.has(fullCode)) {
+            seen.add(fullCode);
+            let market = 'A';
+            if (fullCode.startsWith('hk')) market = 'HK';
+            else if (fullCode.startsWith('us')) market = 'US';
+            else if (fullCode.startsWith('sh000') || fullCode.startsWith('sz399') || fullCode.startsWith('int_')) market = 'INDEX';
+            results.push({
+              symbol: fullCode,
+              code,
+              name,
+              pinyin: parts[6] || '',
+              market
+            });
+          }
+        }
+      }
+    } catch (err) {
+      console.error('Sina search error:', err.message);
+    }
+  }
+
+  // 3. 备用：东财智能联想搜索
   if (results.length < 3) {
     try {
       const emUrl = `https://search-api-web.eastmoney.com/search/jsonp?cb=cb&param=${encodeURIComponent(JSON.stringify({
@@ -305,7 +343,7 @@ async function searchStock(keyword) {
       const res = await fetchWithTimeout(emUrl, { headers: { 'User-Agent': 'Mozilla/5.0' } }, 3000);
       const emText = await res.text();
       if (emText.includes('(')) {
-        const jsonStr = emText.replace(/^cb\(/, '').replace(/\);?$/, '');
+        const jsonStr = emText.substring(emText.indexOf('(') + 1, emText.lastIndexOf(')'));
         const json = JSON.parse(jsonStr);
         const list = json.result?.suggest || [];
         for (const item of list) {
@@ -340,8 +378,8 @@ async function getEastmoneyKline(symbol, period, count = 120) {
     const secid = getEastmoneySecId(symbol);
     if (!secid) return [];
     try {
-      const url = `https://push2his.eastmoney.com/api/qt/stock/trends2/get?secid=${secid}&fields1=f1,f2,f3,f4,f5,f6,f7,f8&fields2=f51,f52,f53,f54,f55,f56,f57,f58`;
-      const res = await fetchWithTimeout(url, { headers: { 'User-Agent': 'Mozilla/5.0' } }, 3500);
+      const url = `https://push2his.eastmoney.com/api/qt/stock/trends2/get?secid=${secid}&ndays=5&fields1=f1,f2,f3,f4,f5,f6,f7,f8&fields2=f51,f52,f53,f54,f55,f56,f57,f58`;
+      const res = await fetchWithTimeout(url, { headers: { 'User-Agent': 'Mozilla/5.0' } }, 6000);
       const json = await res.json();
       const trends = json.data?.trends || [];
       if (!Array.isArray(trends) || trends.length === 0) return [];
@@ -598,6 +636,12 @@ async function getStockKline(symbol, period = 'intraday', count = 120) {
 
       const emBars = await getEastmoneyKline('int_kospi', period, count);
       if (emBars.length > 0) return emBars;
+    }
+
+    // 0.5 5日连续分时走势引擎
+    if (period === '5day') {
+      const em5Day = await getEastmoneyKline(s, '5day');
+      if (em5Day.length > 0) return em5Day;
     }
 
     // 1. 分时数据 (腾讯高速分时引擎)
@@ -1244,8 +1288,8 @@ async function getHotSectors() {
   }
   try {
     const [indRes, conRes] = await Promise.all([
-      fetchWithTimeout('https://push2.eastmoney.com/api/qt/clist/get?pn=1&pz=15&po=1&np=1&ut=bd1d9ddb04089700cf9c27f6f7426281&fltt=2&invt=2&fid=f3&fs=m:90+t:2+f:!50&fields=f2,f3,f4,f12,f14,f104,f105,f128,f140,f136', { headers: { 'User-Agent': 'Mozilla/5.0' } }, 3500).then(r => r.json()),
-      fetchWithTimeout('https://push2.eastmoney.com/api/qt/clist/get?pn=1&pz=15&po=1&np=1&ut=bd1d9ddb04089700cf9c27f6f7426281&fltt=2&invt=2&fid=f3&fs=m:90+t:3+f:!50&fields=f2,f3,f4,f12,f14,f104,f105,f128,f140,f136', { headers: { 'User-Agent': 'Mozilla/5.0' } }, 3500).then(r => r.json())
+      fetchWithTimeout('https://push2.eastmoney.com/api/qt/clist/get?pn=1&pz=15&po=1&np=1&ut=bd1d9ddb04089700cf9c27f6f7426281&fltt=2&invt=2&fid=f3&fs=m:90+t:2+f:!50&fields=f2,f3,f4,f12,f14,f104,f105,f128,f140,f136', { headers: { 'User-Agent': 'Mozilla/5.0' } }, 6000).then(r => r.json()),
+      fetchWithTimeout('https://push2.eastmoney.com/api/qt/clist/get?pn=1&pz=15&po=1&np=1&ut=bd1d9ddb04089700cf9c27f6f7426281&fltt=2&invt=2&fid=f3&fs=m:90+t:3+f:!50&fields=f2,f3,f4,f12,f14,f104,f105,f128,f140,f136', { headers: { 'User-Agent': 'Mozilla/5.0' } }, 6000).then(r => r.json())
     ]);
 
     const formatList = (list = []) => list.map(item => ({
@@ -1280,7 +1324,7 @@ async function getSectorStocks(sectorCode) {
   }
   try {
     const url = `https://push2.eastmoney.com/api/qt/clist/get?pn=1&pz=10&po=1&np=1&ut=bd1d9ddb04089700cf9c27f6f7426281&fltt=2&invt=2&fid=f3&fs=b:${sectorCode}&fields=f2,f3,f4,f12,f14,f62,f184,f66`;
-    const res = await fetchWithTimeout(url, { headers: { 'User-Agent': 'Mozilla/5.0' } }, 3500).then(r => r.json());
+    const res = await fetchWithTimeout(url, { headers: { 'User-Agent': 'Mozilla/5.0' } }, 6000).then(r => r.json());
     const list = (res.data?.diff || []).map(item => {
       const c = String(item.f12);
       const prefix = (c.startsWith('6') || c.startsWith('9')) ? 'sh' : (c.startsWith('8') || c.startsWith('4') ? 'bj' : 'sz');
@@ -1315,7 +1359,7 @@ async function getStockFundFlow(symbol) {
 
   try {
     const url = `https://push2his.eastmoney.com/api/qt/stock/fflow/kline/get?secid=${secid}&lmt=6&klt=101&fields1=f1,f2,f3,f7&fields2=f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61,f62,f63,f64,f65`;
-    const res = await fetchWithTimeout(url, { headers: { 'User-Agent': 'Mozilla/5.0' } }, 3500).then(r => r.json());
+    const res = await fetchWithTimeout(url, { headers: { 'User-Agent': 'Mozilla/5.0' } }, 6000).then(r => r.json());
     const klines = res.data?.klines || [];
     if (!Array.isArray(klines) || klines.length === 0) return null;
 

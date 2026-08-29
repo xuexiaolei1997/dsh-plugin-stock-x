@@ -2,6 +2,18 @@
  * 纯 JS 技术指标计算引擎 (MA / BOLL / EMA / VOL MA / MACD / RSI / KDJ)
  */
 function calculateIndicators(bars) {
+  if (!Array.isArray(bars) || bars.length === 0) {
+    return {
+      dates: [], kValues: [], volumes: [],
+      ma5: [], ma10: [], ma20: [], ma60: [],
+      volMa5: [], volMa10: [],
+      bollMid: [], bollUpper: [], bollLower: [],
+      ema12: [], ema26: [],
+      dif: [], dea: [], macdBar: [],
+      rsi6: [], rsi12: [], rsi24: [],
+      kdjK: [], kdjD: [], kdjJ: []
+    };
+  }
   const dates = bars.map(b => b.time);
   const kValues = bars.map(b => [b.open, b.close, b.low, b.high]);
   const closes = bars.map(b => b.close);
