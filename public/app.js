@@ -316,9 +316,9 @@ function resetPollingTimer() {
 
 async function initOmniStockApp() {
   applyThemeAndFont();
-  await refreshData();
-  resetPollingTimer();
   renderInitialApp();
+  resetPollingTimer();
+  await refreshData();
 }
 
 if (document.readyState === 'loading') {
@@ -1215,7 +1215,50 @@ function updateRibbonDOM() {
       <div onclick="openChart('${idx.symbol}', '${idx.name}', '${idx.market}')"
         class="px-1.5 py-1 rounded-lg flex flex-col items-center justify-center cursor-pointer transition-all hover:scale-105 border ${
           isDark ? 'bg-slate-900 hover:bg-slate-800 border-slate-800 text-slate-100' : 'bg-white hover:bg-slate-100 border-slate-200 shadow-sm text-slate-800'
-       // 页面基础框架渲染
+        }" title="${idx.name} - 点击看图">
+        <div class="flex items-center justify-between w-full text-[10px] leading-tight">
+          <span class="truncate font-semibold opacity-80">${shortName}</span>
+          <span class="font-mono font-bold text-[9px] ${color}">${sign}${idx.change_pct ? idx.change_pct.toFixed(2) : '0.00'}%</span>
+        </div>
+        <div class="font-mono font-black text-[11px] ${color} mt-0.5 tracking-tighter w-full text-center truncate">
+          ${idx.current_price ? (idx.current_price >= 10000 ? idx.current_price.toFixed(0) : idx.current_price.toFixed(1)) : '--'}
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
+function updateOpenChartsQuotes() {
+  floatingWindows.forEach(win => {
+    const quote = watchlist.find(w => w.symbol.toLowerCase() === win.symbol.toLowerCase());
+    if (!quote) return;
+    const winEl = document.getElementById(win.id);
+    if (!winEl) return;
+    const isUp = (quote.change || 0) >= 0;
+    const color = getTrendTextClass(isUp);
+    const sign = isUp ? '+' : '';
+
+    const priceEl = winEl.querySelector('.quote-price');
+    if (priceEl) {
+      priceEl.textContent = quote.current_price ? quote.current_price.toFixed(2) : '--';
+      priceEl.className = `quote-price font-bold text-base ${color}`;
+    }
+    const pctEl = winEl.querySelector('.quote-pct');
+    if (pctEl) {
+      pctEl.textContent = `${sign}${quote.change_pct ? quote.change_pct.toFixed(2) : '0.00'}%`;
+      pctEl.className = `quote-pct font-bold text-base ${color}`;
+    }
+
+    if (win.showDepth) {
+      const depthPanel = document.getElementById(`depth-panel-${win.id}`);
+      if (depthPanel && quote.depth) {
+        depthPanel.outerHTML = renderDepthPanelHtml(win, quote);
+      }
+    }
+  });
+}
+
+// 页面基础框架渲染
 function renderInitialApp() {
   const isDark = theme === 'dark';
   let html = '';
