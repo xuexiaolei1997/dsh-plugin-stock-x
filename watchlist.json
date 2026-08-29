@@ -18,5 +18,15 @@
     "symbol": "nundefined",
     "name": "",
     "market": "A"
+  },
+  {
+    "symbol": "sh000004",
+    "name": "工业指数",
+    "market": "INDEX"
+  },
+  {
+    "symbol": "sh600691",
+    "name": "潞化科技",
+    "market": "A"
   }
 ]

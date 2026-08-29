@@ -166,8 +166,8 @@ const server = http.createServer(async (req, res) => {
   }
 
   // 8. AI分析
-  if (subPath.startsWith('/ai-analysis/')) {
-    const symbol = subPath.replace('/ai-analysis/', '');
+  if (subPath.startsWith('/ai-analysis/') || subPath.startsWith('/ai/')) {
+    const symbol = subPath.replace(/^\/(ai-analysis|ai)\//, '');
     const aiData = await generateStockAIAnalysis(symbol);
     res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
     res.end(JSON.stringify({ data: aiData }));

@@ -7,7 +7,7 @@
 let watchlist = [];
 let indices = [];
 let floatingWindows = [];
-let topZIndex = 100;
+let topZIndex = 100000;
 let currentLayout = 'free';
 let theme = localStorage.getItem('omnistock_theme') || 'dark';
 let fontSize = localStorage.getItem('omnistock_font_size') || 'medium';
@@ -56,14 +56,72 @@ let alertedSessionKeys = new Set();
 let activeDrawerTab = 'watchlist'; // 'watchlist' | 'sectors'
 let activeSectorTab = 'industry';  // 'industry' | 'concept'
 let expandedSectorCode = null;
-let currentAiStrategy = 'general'; // 'general' | 'short_term' | 'value_invest' | 't_grid'
+let currentAiStrategy = 'general';
 
 let activeModalState = {
-  type: null, // 'portfolio' | 'alert' | 'tag'
+  type: null, // 'portfolio' | 'alert' | 'tag' | 'ai_strategy'
   symbol: '',
   name: '',
-  curPrice: 0
+  curPrice: 0,
+  strategyId: null
 };
+
+const DEFAULT_AI_PROMPT_STRATEGIES = [
+  {
+    id: 'general',
+    name: '🎯 全景投研',
+    desc: '多因子量化体检、行业景气度、估值安全边际与中长线操盘综合推演',
+    isBuiltin: true,
+    promptTemplate: `【{name} ({symbol}) 全景投研诊断与交易决策咨询】
+{baseInfo}
+{news}
+请结合以上盘口行情、量化评分与基本面资料，进行深度投研推演：
+1. 短线量价走势与多空动能（关键阻力位、支撑位与纪律止损参考）；
+2. 中长线基本面估值与行业景气度评估；
+3. 具体的仓位管理与操作策略建议。`
+  },
+  {
+    id: 'short_term',
+    name: '⚡ 短线攻防',
+    desc: '分时量价异动、均线突破阻力位/支撑位与 -3% ~ -5% 纪律止损买卖点',
+    isBuiltin: true,
+    promptTemplate: `【{name} ({symbol}) 短线打板与动量攻防策略咨询】
+{baseInfo}
+{news}
+请结合当前的分时量价异动、技术均线突破与日内盘口博弈，重点分析：
+1. 关键突破压力位与短线回调支撑位；
+2. 短线动量是否具备持续性（多空力量对比）；
+3. 明确的短线买入触发条件与严格纪律止损位 (-3% ~ -5%)。`
+  },
+  {
+    id: 'value_invest',
+    name: '💎 价值长线',
+    desc: '商业壁垒、长期成长性、PE/PB 历史分位与分批定投策略',
+    isBuiltin: true,
+    promptTemplate: `【{name} ({symbol}) 价值投资与长期基本面估值咨询】
+{baseInfo}
+{news}
+请结合公司的行业地位、财务估值中枢与长期成长性，重点分析：
+1. 当前 PE / PB 估值所处历史百分位及安全边际；
+2. 公司核心商业壁垒与未来 1~3 年业绩增长确定性；
+3. 分批定投或长期持有的仓位建仓策略。`
+  },
+  {
+    id: 't_grid',
+    name: '🔄 做T解套',
+    desc: '日内高抛低吸点位、网格交易区间与摊低持仓成本策略',
+    isBuiltin: true,
+    promptTemplate: `【{name} ({symbol}) 套牢自救与日内网格做T策略咨询】
+{baseInfo}
+{news}
+请结合当前的振幅特征与分时均价波动，重点分析：
+1. 日内做T的高抛低吸关键点位（日内阻力/支撑）；
+2. 网格交易区间与分批补仓间距建议；
+3. 如何在控制总仓位风险的前提下快速降低持仓成本。`
+  }
+];
+
+let userAiPromptStrategies = JSON.parse(JSON.stringify(DEFAULT_AI_PROMPT_STRATEGIES));
 
 const STOCK_TAG_OPTIONS = [
   { id: 'core', label: '🔴 核心重仓', color: 'bg-red-500/15 text-red-400 border-red-500/30' },
@@ -79,6 +137,13 @@ function loadLocalUserData() {
     userAlerts = JSON.parse(localStorage.getItem('omnistock_alerts') || '{}');
     userNotes = JSON.parse(localStorage.getItem('omnistock_notes') || '{}');
     userTags = JSON.parse(localStorage.getItem('omnistock_tags') || '{}');
+    const stratRaw = localStorage.getItem('omnistock_ai_strategies_v1');
+    if (stratRaw) {
+      const parsed = JSON.parse(stratRaw);
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        userAiPromptStrategies = parsed;
+      }
+    }
   } catch (_) {}
 }
 
@@ -96,6 +161,19 @@ function saveNotes() {
 
 function saveTags() {
   try { localStorage.setItem('omnistock_tags', JSON.stringify(userTags)); } catch (_) {}
+}
+
+function saveAiStrategies() {
+  try { localStorage.setItem('omnistock_ai_strategies_v1', JSON.stringify(userAiPromptStrategies)); } catch (_) {}
+}
+
+function resetAiStrategiesToDefault() {
+  if (confirm('确定要恢复为官方预设的 4 大 AI 提示词策略模板吗？自定义修改将被还原。')) {
+    userAiPromptStrategies = JSON.parse(JSON.stringify(DEFAULT_AI_PROMPT_STRATEGIES));
+    saveAiStrategies();
+    renderInitialApp();
+    showToast('🔄 已恢复为官方默认 AI 提示词策略！');
+  }
 }
 
 loadLocalUserData();
@@ -931,11 +1009,126 @@ function setStockTag(symbol, tagId) {
   showToast(`🏷️ 已更新【${symbol}】分类标签！`);
 }
 
+function openAiStrategyModal(strategyId = null) {
+  let strat = null;
+  if (strategyId) {
+    strat = userAiPromptStrategies.find(s => s.id === strategyId);
+  }
+  activeModalState = {
+    type: 'ai_strategy',
+    strategyId: strategyId || null,
+    symbol: '',
+    name: '',
+    curPrice: 0
+  };
+
+  const modal = document.getElementById('omni-ai-strategy-modal');
+  if (!modal) return;
+
+  const titleEl = document.getElementById('ai-strategy-modal-title');
+  const nameInput = document.getElementById('ai-strategy-name-input');
+  const descInput = document.getElementById('ai-strategy-desc-input');
+  const tmplInput = document.getElementById('ai-strategy-tmpl-input');
+
+  if (titleEl) titleEl.textContent = strat ? `✏️ 编辑策略提示词 - ${strat.name}` : '➕ 新建自定义 AI 策略提示词';
+  if (nameInput) nameInput.value = strat ? strat.name : '';
+  if (descInput) descInput.value = strat ? (strat.desc || '') : '';
+  if (tmplInput) tmplInput.value = strat ? strat.promptTemplate : `【{name} ({symbol}) 自定义策略决策咨询】\n{baseInfo}\n{news}\n{radar}\n请结合以上数据，重点深度推演：\n1. \n2. \n3. 具体的仓位管理与操盘纪律建议。`;
+
+  modal.classList.remove('hidden');
+}
+
+function closeAiStrategyModal() {
+  activeModalState.type = null;
+  const modal = document.getElementById('omni-ai-strategy-modal');
+  if (modal) modal.classList.add('hidden');
+}
+
+function insertPromptPlaceholder(ph) {
+  const tmplInput = document.getElementById('ai-strategy-tmpl-input');
+  if (!tmplInput) return;
+  const start = tmplInput.selectionStart;
+  const end = tmplInput.selectionEnd;
+  const text = tmplInput.value;
+  tmplInput.value = text.substring(0, start) + ph + text.substring(end);
+  tmplInput.focus();
+  tmplInput.selectionStart = tmplInput.selectionEnd = start + ph.length;
+}
+
+function saveAiStrategyFromModal() {
+  const nameInput = document.getElementById('ai-strategy-name-input');
+  const descInput = document.getElementById('ai-strategy-desc-input');
+  const tmplInput = document.getElementById('ai-strategy-tmpl-input');
+  if (!nameInput || !tmplInput) return;
+
+  const name = nameInput.value.trim();
+  const desc = descInput?.value.trim() || '';
+  const tmpl = tmplInput.value.trim();
+
+  if (!name) {
+    showToast('⚠️ 请输入策略名称');
+    return;
+  }
+  if (!tmpl) {
+    showToast('⚠️ 请输入提示词模板内容');
+    return;
+  }
+
+  const stratId = activeModalState.strategyId;
+  if (stratId) {
+    const idx = userAiPromptStrategies.findIndex(s => s.id === stratId);
+    if (idx !== -1) {
+      userAiPromptStrategies[idx].name = name;
+      userAiPromptStrategies[idx].desc = desc;
+      userAiPromptStrategies[idx].promptTemplate = tmpl;
+    }
+  } else {
+    const newId = `custom_${Date.now()}`;
+    userAiPromptStrategies.push({
+      id: newId,
+      name,
+      desc,
+      isBuiltin: false,
+      promptTemplate: tmpl
+    });
+  }
+
+  saveAiStrategies();
+  closeAiStrategyModal();
+  renderInitialApp();
+  // 刷新所有当前打开的 AI 诊断看板
+  floatingWindows.forEach(w => {
+    if (w.period === 'ai') renderAIAnalysis(w);
+  });
+  showToast(`✅ 已保存 AI 策略【${name}】！`);
+}
+
+function deleteAiStrategy(strategyId) {
+  const strat = userAiPromptStrategies.find(s => s.id === strategyId);
+  if (!strat) return;
+  if (confirm(`确定要删除策略【${strat.name}】吗？`)) {
+    userAiPromptStrategies = userAiPromptStrategies.filter(s => s.id !== strategyId);
+    saveAiStrategies();
+    renderInitialApp();
+    floatingWindows.forEach(w => {
+      if (w.period === 'ai') {
+        if (w.aiStrategy === strategyId) w.aiStrategy = 'general';
+        renderAIAnalysis(w);
+      }
+    });
+    showToast(`🗑️ 已删除策略【${strat.name}】`);
+  }
+}
+
 function setDrawerTab(tab) {
   activeDrawerTab = tab;
   renderInitialApp();
   if (tab === 'sectors') {
     updateSectorsDOM();
+  } else if (tab === 'global') {
+    updateGlobalDOM();
+  } else {
+    updateWatchlistDOM();
   }
 }
 
@@ -1200,37 +1393,100 @@ function updateWatchlistDOM() {
   }).join('');
 }
 
-function updateRibbonDOM() {
-  const ribbon = document.getElementById('mini-indices-ribbon');
-  if (!ribbon) return;
+function updateGlobalDOM() {
+  const container = document.getElementById('global-indices-container');
+  if (!container) return;
   const isDark = theme === 'dark';
-  const displayIndices = indices.slice(0, 8);
-  ribbon.innerHTML = displayIndices.map(idx => {
-    const isUp = (idx.change || 0) >= 0;
-    const color = getTrendTextClass(isUp);
-    const sign = isUp ? '+' : '';
-    const shortName = idx.short_name || idx.name.replace('指数', '').replace('成指', '').slice(0, 3);
 
-    return `
-      <div onclick="openChart('${idx.symbol}', '${idx.name}', '${idx.market}')"
-        class="px-1.5 py-1 rounded-lg flex flex-col items-center justify-center cursor-pointer transition-all hover:scale-105 border ${
-          isDark ? 'bg-slate-900 hover:bg-slate-800 border-slate-800 text-slate-100' : 'bg-white hover:bg-slate-100 border-slate-200 shadow-sm text-slate-800'
-        }" title="${idx.name} - 点击看图">
-        <div class="flex items-center justify-between w-full text-[10px] leading-tight">
-          <span class="truncate font-semibold opacity-80">${shortName}</span>
-          <span class="font-mono font-bold text-[9px] ${color}">${sign}${idx.change_pct ? idx.change_pct.toFixed(2) : '0.00'}%</span>
+  if (!indices || indices.length === 0) {
+    container.innerHTML = `
+      <div class="p-8 text-center flex flex-col items-center justify-center gap-2">
+        <div class="w-6 h-6 border-2 border-emerald-500 border-t-transparent rounded-full animate-spin"></div>
+        <span class="text-xs opacity-60">正在拉取全球核心指数实时行情...</span>
+      </div>
+    `;
+    return;
+  }
+
+  const groups = [
+    { title: '🇨🇳 中国 A 股核心基准', items: indices.filter(i => i.region === '🇨🇳 A股核心' || i.symbol.startsWith('sh000') || i.symbol.startsWith('sz399')) },
+    { title: '🇭🇰 港股 & 🇺🇸 美股标杆', items: indices.filter(i => i.region === '🇭🇰 港股基准' || i.region === '🇺🇸 美股基准' || i.market === 'HK' || i.market === 'US') },
+    { title: '🌏 亚太与欧美主要市场', items: indices.filter(i => i.region === '🌏 亚太欧洲' || i.market === 'GLOBAL') }
+  ];
+
+  let html = `
+    <div class="p-3 space-y-3">
+      <div class="flex items-center justify-between px-1">
+        <div class="flex items-center gap-1.5 text-xs font-bold text-emerald-400">
+          <span>🌐 全球核心指数全景看板</span>
+          <span class="text-[10px] font-mono px-1.5 py-0.2 rounded bg-emerald-500/10 text-emerald-400 font-semibold">${indices.length} 大标杆</span>
         </div>
-        <div class="font-mono font-black text-[11px] ${color} mt-0.5 tracking-tighter w-full text-center truncate">
-          ${idx.current_price ? (idx.current_price >= 10000 ? idx.current_price.toFixed(0) : idx.current_price.toFixed(1)) : '--'}
+        <button onclick="openBatchTiled(indices.slice(0, 4))" class="text-[10px] px-2 py-0.5 rounded-lg border font-semibold hover:border-emerald-500 transition-colors ${
+          isDark ? 'bg-slate-800 border-slate-700 text-slate-300' : 'bg-slate-100 border-slate-300 text-slate-700'
+        }" title="一键平铺打开前 4 大核心指数">
+          ⚡ 批量看图
+        </button>
+      </div>
+  `;
+
+  groups.forEach(g => {
+    if (g.items.length === 0) return;
+    html += `
+      <div class="space-y-1.5">
+        <div class="text-[10px] font-bold opacity-60 px-1 tracking-wider uppercase">${g.title}</div>
+        <div class="grid grid-cols-2 gap-2">
+          ${g.items.map(idx => {
+            const isUp = (idx.change || 0) >= 0;
+            const color = getTrendTextClass(isUp);
+            const badgeBg = isUp 
+              ? (appSettings.colorScheme === 'green-up' ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/25' : 'bg-red-500/15 text-red-400 border-red-500/25')
+              : (appSettings.colorScheme === 'green-up' ? 'bg-red-500/15 text-red-400 border-red-500/25' : 'bg-emerald-500/15 text-emerald-400 border-emerald-500/25');
+            const sign = isUp ? '+' : '';
+            const priceStr = idx.current_price ? (idx.current_price >= 10000 ? idx.current_price.toLocaleString('en-US', { minimumFractionDigits: 1, maximumFractionDigits: 1 }) : idx.current_price.toFixed(2)) : '--';
+            const changeStr = idx.change !== undefined ? `${sign}${idx.change.toFixed(2)}` : '--';
+            const pctStr = `${sign}${idx.change_pct !== undefined ? idx.change_pct.toFixed(2) : '0.00'}%`;
+
+            return `
+              <div onclick="openChart('${idx.symbol}', '${idx.name}', '${idx.market}')"
+                class="p-2.5 rounded-xl border flex flex-col justify-between cursor-pointer transition-all hover:scale-102 hover:shadow-lg group ${
+                  isDark ? 'bg-slate-900/90 hover:bg-slate-800 border-slate-800 hover:border-slate-700' : 'bg-white hover:bg-slate-50 border-slate-200 shadow-sm hover:border-slate-300'
+                }" title="点击打开【${idx.name}】全景走势图">
+                <div class="flex items-center justify-between gap-1 mb-1">
+                  <span class="font-bold text-xs truncate ${isDark ? 'text-slate-200 group-hover:text-white' : 'text-slate-800'}">${idx.name}</span>
+                  <span class="font-mono font-bold text-[10px] px-1.5 py-0.2 rounded border ${badgeBg}">
+                    ${pctStr}
+                  </span>
+                </div>
+                <div class="flex items-baseline justify-between mt-1">
+                  <span class="font-mono font-black text-sm tracking-tight ${color}">
+                    ${priceStr}
+                  </span>
+                  <span class="font-mono text-[10px] opacity-60 ${color}">
+                    ${changeStr}
+                  </span>
+                </div>
+              </div>
+            `;
+          }).join('')}
         </div>
       </div>
     `;
-  }).join('');
+  });
+
+  html += `</div>`;
+  container.innerHTML = html;
+}
+
+function updateRibbonDOM() {
+  updateGlobalDOM();
 }
 
 async function updateOpenChartsQuotes() {
   for (const win of floatingWindows) {
-    const quote = watchlist.find(w => w.symbol.toLowerCase() === win.symbol.toLowerCase());
+    if (!win?.symbol) continue;
+    const winSym = win.symbol.toLowerCase();
+    const quote = watchlist.find(w => w?.symbol?.toLowerCase() === winSym) ||
+                  indices.find(i => i?.symbol?.toLowerCase() === winSym);
     const winEl = document.getElementById(win.id);
     if (!winEl) continue;
     const curQuote = quote || await fetchCachedQuote(win.symbol);
@@ -1300,7 +1556,7 @@ function renderInitialApp() {
         <div id="panel-drag-header" class="px-4 py-3 border-b flex items-center justify-between cursor-move select-none ${
           isDark ? 'bg-slate-800 border-slate-700 text-slate-100' : 'bg-slate-100 border-slate-200 text-slate-800'
         }">
-          <div class="flex items-center gap-1.5 p-0.5 rounded-xl border ${isDark ? 'bg-slate-950/60 border-slate-700/60' : 'bg-slate-200/70 border-slate-300'}">
+          <div class="flex items-center gap-1 p-0.5 rounded-xl border ${isDark ? 'bg-slate-950/60 border-slate-700/60' : 'bg-slate-200/70 border-slate-300'}">
             <button onclick="setDrawerTab('watchlist')" class="px-2.5 py-1 rounded-lg text-xs font-bold transition-all ${
               activeDrawerTab === 'watchlist' ? 'bg-blue-600 text-white shadow-sm' : (isDark ? 'text-slate-400 hover:text-white' : 'text-slate-600 hover:text-slate-900')
             }">
@@ -1310,6 +1566,11 @@ function renderInitialApp() {
               activeDrawerTab === 'sectors' ? 'bg-purple-600 text-white shadow-sm' : (isDark ? 'text-slate-400 hover:text-white' : 'text-slate-600 hover:text-slate-900')
             }">
               🔥 领涨热点
+            </button>
+            <button onclick="setDrawerTab('global')" class="px-2.5 py-1 rounded-lg text-xs font-bold transition-all ${
+              activeDrawerTab === 'global' ? 'bg-emerald-600 text-white shadow-sm' : (isDark ? 'text-slate-400 hover:text-white' : 'text-slate-600 hover:text-slate-900')
+            }">
+              🌐 全球
             </button>
           </div>
 
@@ -1325,11 +1586,6 @@ function renderInitialApp() {
             </button>
           </div>
         </div>
-
-        <!-- 全球核心指数卡片栏 -->
-        <div id="mini-indices-ribbon" class="px-2.5 py-1.5 border-b grid grid-cols-4 gap-1.5 text-xs ${
-          isDark ? 'bg-slate-900 border-slate-800' : 'bg-slate-50 border-slate-200'
-        }"></div>
 
         <!-- 搜索栏 -->
         <div class="p-2.5 border-b relative ${isDark ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-200'}">
@@ -1389,13 +1645,18 @@ function renderInitialApp() {
           <!-- 个人持仓总览卡片插槽 -->
           <div id="portfolio-summary-slot"></div>
 
-          <!-- 自选股票列表 (实色底色，不透明) -->
-          <div id="watchlist-items-container" class="flex-1 overflow-y-auto divide-y max-h-[300px] ${
+          <!-- 自选股票列表 (实色底色，不透明，更大纵向空间) -->
+          <div id="watchlist-items-container" class="flex-1 overflow-y-auto divide-y max-h-[380px] ${
             isDark ? 'bg-slate-900 divide-slate-800' : 'bg-white divide-slate-100'
           }"></div>
-        ` : `
+        ` : activeDrawerTab === 'sectors' ? `
           <!-- 全市场领涨行业与热门概念板块专属容器 -->
           <div id="sectors-items-container" class="flex-1 overflow-y-auto ${
+            isDark ? 'bg-slate-900' : 'bg-white'
+          }"></div>
+        ` : `
+          <!-- 🌐 全球核心指数全景平铺专属容器 -->
+          <div id="global-indices-container" class="flex-1 overflow-y-auto ${
             isDark ? 'bg-slate-900' : 'bg-white'
           }"></div>
         `}
@@ -1535,6 +1796,55 @@ function renderInitialApp() {
               </div>
             </div>
           </div>
+
+          <!-- 5. 🤖 AI 提示词与策略模板管理 -->
+          <div id="setting-section-ai" class="space-y-3">
+            <div class="flex items-center justify-between">
+              <label class="font-bold text-sm text-purple-400 flex items-center gap-1.5">
+                <span>🤖 AI 提示词策略模板管理</span>
+                <span class="text-[10px] font-mono px-2 py-0.5 rounded-full bg-purple-500/15 text-purple-300 font-normal">
+                  ${userAiPromptStrategies.length} 个策略
+                </span>
+              </label>
+              <div class="flex items-center gap-2">
+                <button onclick="resetAiStrategiesToDefault()" class="px-2.5 py-1 rounded-lg border text-[11px] font-semibold text-slate-400 hover:text-white transition-colors ${isDark ? 'bg-slate-800 border-slate-700' : 'bg-slate-100 border-slate-300'}">
+                  🔄 恢复默认
+                </button>
+                <button onclick="openAiStrategyModal()" class="px-3 py-1 rounded-lg bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white font-bold text-xs shadow-md shadow-purple-500/20 transition-all hover:scale-105">
+                  ➕ 新建策略
+                </button>
+              </div>
+            </div>
+
+            <div class="space-y-2">
+              ${userAiPromptStrategies.map(strat => `
+                <div class="p-3.5 rounded-xl border flex items-start justify-between gap-3 transition-colors ${
+                  isDark ? 'bg-slate-950/60 border-slate-800 hover:border-slate-700' : 'bg-slate-50 border-slate-200 hover:bg-slate-100'
+                }">
+                  <div class="min-w-0 flex-1">
+                    <div class="flex items-center gap-2 mb-1">
+                      <span class="font-bold text-sm text-slate-100">${strat.name}</span>
+                      ${strat.isBuiltin ? `<span class="text-[10px] px-1.5 py-0.2 rounded bg-blue-500/10 text-blue-400 font-mono">官方预设</span>` : `<span class="text-[10px] px-1.5 py-0.2 rounded bg-purple-500/10 text-purple-400 font-mono">自定义</span>`}
+                    </div>
+                    <div class="text-[11px] opacity-70 mb-2">${strat.desc || '针对特定交易模式定制的投研提示词'}</div>
+                    <div class="p-2 rounded-lg font-mono text-[10px] line-clamp-2 leading-relaxed opacity-75 border ${isDark ? 'bg-slate-900 border-slate-800 text-slate-300' : 'bg-white border-slate-200 text-slate-600'}">
+                      ${strat.promptTemplate}
+                    </div>
+                  </div>
+                  <div class="flex flex-col gap-1.5 flex-shrink-0">
+                    <button onclick="openAiStrategyModal('${strat.id}')" class="px-2.5 py-1 rounded-lg bg-blue-600/15 hover:bg-blue-600 text-blue-400 hover:text-white font-semibold text-xs transition-colors">
+                      ✏️ 编辑
+                    </button>
+                    ${!strat.isBuiltin ? `
+                      <button onclick="deleteAiStrategy('${strat.id}')" class="px-2.5 py-1 rounded-lg bg-red-600/15 hover:bg-red-600 text-red-400 hover:text-white font-semibold text-xs transition-colors">
+                        🗑️ 删除
+                      </button>
+                    ` : ''}
+                  </div>
+                </div>
+              `).join('')}
+            </div>
+          </div>
         </div>
 
         <div class="px-5 py-3 border-t flex justify-end ${isDark ? 'bg-slate-800/80 border-slate-700' : 'bg-slate-100 border-slate-200'}">
@@ -1619,6 +1929,58 @@ function renderInitialApp() {
         <div id="tag-options-container" class="p-4 text-xs"></div>
       </div>
     </div>
+
+    <!-- 6. AI 策略提示词编辑模态框 -->
+    <div id="omni-ai-strategy-modal" class="hidden fixed inset-0 z-[999999] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+      <div class="w-full max-w-lg rounded-2xl border shadow-2xl overflow-hidden flex flex-col max-h-[90vh] ${
+        isDark ? 'bg-slate-900 border-slate-700 text-slate-100' : 'bg-white border-slate-300 text-slate-800'
+      }">
+        <div class="px-5 py-3.5 border-b flex items-center justify-between ${isDark ? 'bg-slate-800/80 border-slate-700' : 'bg-slate-100 border-slate-200'}">
+          <div id="ai-strategy-modal-title" class="font-bold text-sm text-purple-400">🤖 编辑策略提示词</div>
+          <button onclick="closeAiStrategyModal()" class="p-1 rounded-lg hover:bg-red-500/20 text-slate-400 hover:text-red-500 font-bold">✕</button>
+        </div>
+        <div class="p-5 space-y-4 text-xs overflow-y-auto">
+          <div>
+            <label class="block font-semibold mb-1 opacity-80">策略模式名称 (带图标更生动):</label>
+            <input id="ai-strategy-name-input" type="text" placeholder="如 💰 高股息收息 或 🚀 龙头接力" class="w-full px-3 py-2 border rounded-xl font-sans text-xs focus:outline-none focus:border-purple-500 ${isDark ? 'bg-slate-800 border-slate-700 text-slate-100' : 'bg-slate-50 border-slate-300 text-slate-900'}" />
+          </div>
+          <div>
+            <label class="block font-semibold mb-1 opacity-80">简要功能描述 (用于鼠标悬停提示):</label>
+            <input id="ai-strategy-desc-input" type="text" placeholder="如 重点关注股息率、自由现金流与估值安全边际" class="w-full px-3 py-2 border rounded-xl font-sans text-xs focus:outline-none focus:border-purple-500 ${isDark ? 'bg-slate-800 border-slate-700 text-slate-100' : 'bg-slate-50 border-slate-300 text-slate-900'}" />
+          </div>
+          <div>
+            <div class="flex items-center justify-between mb-1.5">
+              <label class="font-semibold opacity-80">提示词内容模板 (支持点击下方变量插入):</label>
+            </div>
+            
+            <!-- 可用动态变量快捷药丸 -->
+            <div class="flex flex-wrap items-center gap-1.5 mb-2">
+              <span class="text-[10px] opacity-60">动态变量:</span>
+              ${[
+                { tag: '{name}', label: '股票名称' },
+                { tag: '{symbol}', label: '代码' },
+                { tag: '{price}', label: '现价' },
+                { tag: '{changePct}', label: '涨跌幅' },
+                { tag: '{baseInfo}', label: '行情面板' },
+                { tag: '{news}', label: '最新资讯' },
+                { tag: '{levels}', label: '支撑阻力位' },
+                { tag: '{radar}', label: '五维量化分' }
+              ].map(p => `
+                <button type="button" onclick="insertPromptPlaceholder('${p.tag}')" class="px-2 py-0.5 rounded-md border text-[10px] font-mono transition-colors ${isDark ? 'bg-slate-800/80 border-slate-700 text-purple-300 hover:bg-purple-600/20 hover:border-purple-500' : 'bg-slate-100 border-slate-300 text-purple-700 hover:bg-purple-50 hover:border-purple-500'}">
+                  + ${p.tag} (${p.label})
+                </button>
+              `).join('')}
+            </div>
+
+            <textarea id="ai-strategy-tmpl-input" rows="8" placeholder="编写提供给 AI 的诊断提问指令..." class="w-full p-3 rounded-xl border font-mono text-xs focus:outline-none focus:border-purple-500 leading-relaxed ${isDark ? 'bg-slate-950/70 border-slate-800 text-slate-100' : 'bg-slate-50 border-slate-300 text-slate-900'}"></textarea>
+          </div>
+          <div class="flex items-center justify-end gap-3 pt-2">
+            <button onclick="closeAiStrategyModal()" class="px-4 py-2 rounded-xl border ${isDark ? 'border-slate-700 hover:bg-slate-800' : 'border-slate-300 hover:bg-slate-100'}">取消</button>
+            <button onclick="saveAiStrategyFromModal()" class="px-5 py-2 rounded-xl bg-purple-600 hover:bg-purple-500 text-white font-bold shadow-md shadow-purple-500/25">保存策略</button>
+          </div>
+        </div>
+      </div>
+    </div>
   `;
 
   // 3. 走势图窗口容器
@@ -1638,10 +2000,11 @@ function renderInitialApp() {
 
   if (activeDrawerTab === 'sectors') {
     updateSectorsDOM();
+  } else if (activeDrawerTab === 'global') {
+    updateGlobalDOM();
   } else {
     updateWatchlistDOM();
   }
-  updateRibbonDOM();
   bindDrawerEvents();
 
   floatingWindows.forEach(win => {
@@ -1697,7 +2060,8 @@ function updateFooterManager() {
 // 渲染单个窗口 HTML (含 AI 分析顶栏按钮、五档深度与专属面板)
 function renderSingleWindowHtml(win) {
   const isDark = theme === 'dark';
-  const quote = watchlist.find(w => w.symbol.toLowerCase() === win.symbol.toLowerCase()) || {};
+  const quote = watchlist.find(w => w.symbol.toLowerCase() === win.symbol.toLowerCase()) || 
+                indices.find(i => i.symbol.toLowerCase() === win.symbol.toLowerCase()) || {};
   const isUp = (quote.change || 0) >= 0;
   const color = getTrendTextClass(isUp);
   const sign = isUp ? '+' : '';
@@ -1795,15 +2159,15 @@ function renderSingleWindowHtml(win) {
       </div>
 
       <!-- 图表 / F10 / 资讯 / AI分析 / 资金流向 / 交易笔记 专属容器 -->
-      <div id="chart-container-${win.id}" class="flex-1 p-2.5 relative overflow-y-auto flex flex-col ${isDark ? 'bg-slate-950/40' : 'bg-slate-50/50'}">
+      <div id="chart-container-${win.id}" class="flex-1 min-h-0 p-2.5 relative overflow-y-auto flex flex-col ${isDark ? 'bg-slate-950/40' : 'bg-slate-50/50'}">
         <!-- 实时 HUD 数据状态栏 (随十字光标高频跳动) -->
-        <div id="hud-bar-${win.id}" class="px-3 py-1 mb-1.5 rounded-lg border text-[11px] font-mono flex items-center justify-between gap-2 overflow-x-auto select-none transition-all ${
+        <div id="hud-bar-${win.id}" class="px-3 py-1 mb-1.5 rounded-lg border text-[11px] font-mono flex items-center justify-between gap-2 overflow-x-auto select-none transition-all flex-shrink-0 ${
           isDark ? 'bg-slate-900/90 border-slate-800 text-slate-300' : 'bg-white border-slate-200 text-slate-700 shadow-sm'
         } ${win.period === 'f10' || win.period === 'news' || win.period === 'ai' || win.period === 'fundflow' || win.period === 'notes' ? 'hidden' : ''}">
           <span class="opacity-70 text-[10px]">✨ 移动十字光标查看各周期量化指标动态</span>
         </div>
 
-        <div id="chart-${win.id}" class="w-full flex-1 ${win.period === 'f10' || win.period === 'news' || win.period === 'ai' || win.period === 'fundflow' || win.period === 'notes' ? 'hidden' : ''}"></div>
+        <div id="chart-${win.id}" style="width: 100%; height: 100%; min-height: 380px; flex: 1;" class="w-full flex-1 ${win.period === 'f10' || win.period === 'news' || win.period === 'ai' || win.period === 'fundflow' || win.period === 'notes' ? 'hidden' : ''}"></div>
         <div id="f10-container-${win.id}" class="space-y-3.5 leading-relaxed ${win.period !== 'f10' ? 'hidden' : ''}"></div>
         <div id="news-container-${win.id}" class="space-y-3.5 leading-relaxed ${win.period !== 'news' ? 'hidden' : ''}"></div>
         <div id="ai-container-${win.id}" class="space-y-3.5 leading-relaxed ${win.period !== 'ai' ? 'hidden' : ''}"></div>
@@ -1969,8 +2333,13 @@ function toggleMorphDrawer(open) {
       panelView.style.opacity = '1';
       panelView.style.transform = 'scale(1)';
       panelView.style.pointerEvents = 'auto';
-      updateWatchlistDOM();
-      updateRibbonDOM();
+      if (activeDrawerTab === 'sectors') {
+        updateSectorsDOM();
+      } else if (activeDrawerTab === 'global') {
+        updateGlobalDOM();
+      } else {
+        updateWatchlistDOM();
+      }
     }
   } else {
     isDrawerOpen = false;
@@ -2603,62 +2972,40 @@ function saveStockNote(winId, symbol) {
   if (win && win.period === 'notes') renderNotes(win);
 }
 
-// 策略定制提示词构造器
-function buildStrategyPrompt(symbol, name, aiData, quote, newsList, strategy = 'general') {
+// 策略定制提示词构造器 (支持变量占位符与自定义策略模板)
+function buildStrategyPrompt(symbol, name, aiData, quote = {}, newsList = [], strategyId = 'general') {
   const isUp = (quote.change || 0) >= 0;
   const sign = isUp ? '+' : '';
+  const priceStr = quote.current_price !== undefined ? quote.current_price.toFixed(2) : '--';
+  const changePctStr = `${sign}${quote.change_pct !== undefined ? quote.change_pct.toFixed(2) : '0.00'}%`;
+  
   const baseInfo = `【${name} (${symbol}) 股票实时投研诊断与交易决策咨询】
-- 最新现价: ¥${quote.current_price?.toFixed(2) || '--'} (今日涨跌: ${sign}${quote.change_pct?.toFixed(2) || '0.00'}%)
-- 今开 / 昨收: ¥${quote.open?.toFixed(2) || '--'} / ¥${quote.prev_close?.toFixed(2) || '--'}
-- 最高 / 最低: ¥${quote.high?.toFixed(2) || '--'} / ¥${quote.low?.toFixed(2) || '--'}
-- 换手率: ${quote.turnover_rate ? quote.turnover_rate.toFixed(2) + '%' : '--'}，成交额: ${quote.turnover ? '¥' + (quote.turnover / 100000000).toFixed(2) + '亿' : '--'}
-- 市盈率(PE): ${quote.pe_ratio?.toFixed(1) || '--'}，市净率(PB): ${quote.pb_ratio?.toFixed(1) || '--'}，总市值: ${quote.market_cap ? quote.market_cap.toFixed(0) + '亿' : '--'}`;
+- 最新现价: ¥${priceStr} (今日涨跌: ${changePctStr})
+- 今开 / 昨收: ¥${quote.open !== undefined ? quote.open.toFixed(2) : '--'} / ¥${quote.prev_close !== undefined ? quote.prev_close.toFixed(2) : '--'}
+- 最高 / 最低: ¥${quote.high !== undefined ? quote.high.toFixed(2) : '--'} / ¥${quote.low !== undefined ? quote.low.toFixed(2) : '--'}
+- 换手率: ${quote.turnover_rate !== undefined ? quote.turnover_rate.toFixed(2) + '%' : '--'}，成交额: ${quote.turnover ? '¥' + (quote.turnover / 100000000).toFixed(2) + '亿' : '--'}
+- 市盈率(PE): ${quote.pe_ratio !== undefined ? quote.pe_ratio.toFixed(1) : '--'}，市净率(PB): ${quote.pb_ratio !== undefined ? quote.pb_ratio.toFixed(1) : '--'}，总市值: ${quote.market_cap ? quote.market_cap.toFixed(0) + '亿' : '--'}`;
 
   const newsStr = newsList && newsList.length > 0
     ? `\n最新资讯动态 (附源链接):\n${newsList.slice(0, 3).map((n, i) => `${i+1}. [${n.media}] [${n.title}](${n.url})`).join('\n')}\n`
     : '';
 
-  if (strategy === 'short_term') {
-    return `${baseInfo}
-${newsStr}
-【短线打板与动量攻防策略咨询】
-请结合当前的分时量价异动、技术均线突破与日内盘口博弈，重点分析：
-1. 关键突破压力位与短线回调支撑位；
-2. 短线动量是否具备持续性（多空力量对比）；
-3. 明确的短线买入触发条件与严格纪律止损位 (-3% ~ -5%)。`;
-  }
+  const levelsStr = aiData?.levels ? `- 近20日支撑位: ¥${aiData.levels.support}，阻力位: ¥${aiData.levels.resistance}，止损参考: ¥${aiData.levels.stop_loss}` : '';
+  const radarStr = aiData?.radar ? `- 量化多因子得分: 技术面 ${aiData.radar.technical}分，基本面 ${aiData.radar.fundamental}分，估值 ${aiData.radar.valuation}分，成长性 ${aiData.radar.growth}分，情绪 ${aiData.radar.sentiment}分 (综合量化总分: ${aiData.total_score}分)` : '';
 
-  if (strategy === 'value_invest') {
-    return `${baseInfo}
-${newsStr}
-【价值投资与长期基本面估值咨询】
-请结合公司的行业地位、财务估值中枢与长期成长性，重点分析：
-1. 当前 PE / PB 估值所处历史百分位及安全边际；
-2. 公司核心商业壁垒与未来 1~3 年业绩增长确定性；
-3. 分批定投或长期持有的仓位建仓策略。`;
-  }
+  const strat = userAiPromptStrategies.find(s => s.id === strategyId) || userAiPromptStrategies[0] || DEFAULT_AI_PROMPT_STRATEGIES[0];
+  let tmpl = strat.promptTemplate || DEFAULT_AI_PROMPT_STRATEGIES[0].promptTemplate;
 
-  if (strategy === 't_grid') {
-    return `${baseInfo}
-${newsStr}
-【套牢自救与日内网格做T策略咨询】
-请结合当前的振幅特征与分时均价波动，重点分析：
-1. 日内做T的高抛低吸关键点位（日内阻力/支撑）；
-2. 网格交易区间与分批补仓间距建议；
-3. 如何在控制总仓位风险的前提下快速降低持仓成本。`;
-  }
-
-  // 默认全景综合
-  if (aiData && aiData.prompt_report) {
-    return aiData.prompt_report;
-  }
-
-  return `${baseInfo}
-${newsStr}
-请结合以上实时行情盘口与量化特征，深度分析：
-1. 短线走势与多空动能（阻力位、支撑位、止损位设定）；
-2. 中长线基本面估值与行业景气度评估；
-3. 具体的仓位管理与操作策略建议。`;
+  // 变量替换
+  return tmpl
+    .replace(/{name}/g, name)
+    .replace(/{symbol}/g, symbol)
+    .replace(/{price}/g, priceStr)
+    .replace(/{changePct}/g, changePctStr)
+    .replace(/{baseInfo}/g, baseInfo)
+    .replace(/{news}/g, newsStr)
+    .replace(/{levels}/g, levelsStr)
+    .replace(/{radar}/g, radarStr);
 }
 
 function setAiPromptStrategy(winId, symbol, strategyKey) {
@@ -2711,27 +3058,27 @@ async function renderAIAnalysis(win) {
       return;
     }
 
-    const curStrategy = win.aiStrategy || 'general';
+    const curStrategy = win.aiStrategy || userAiPromptStrategies[0]?.id || 'general';
     const quote = watchlist.find(w => w.symbol.toLowerCase() === win.symbol.toLowerCase()) || {};
     const promptContent = buildStrategyPrompt(win.symbol, win.name, ai, quote, nData?.news || [], curStrategy);
 
     container.innerHTML = `
-      <!-- 策略模式选择药丸 -->
-      <div class="flex items-center gap-1.5 p-1 rounded-xl border mb-3 ${isDark ? 'bg-slate-950/60 border-slate-800' : 'bg-slate-100 border-slate-200'}">
-        <span class="text-[10px] font-bold opacity-60 ml-2 mr-1">策略模式:</span>
-        ${[
-          { key: 'general', label: '🎯 全景投研' },
-          { key: 'short_term', label: '⚡ 短线攻防' },
-          { key: 'value_invest', label: '💎 价值长线' },
-          { key: 't_grid', label: '🔄 做T解套' }
-        ].map(s => `
-          <button onclick="setAiPromptStrategy('${win.id}', '${win.symbol}', '${s.key}')"
-            class="px-2.5 py-1 rounded-lg text-xs font-semibold transition-all ${
-              curStrategy === s.key ? 'bg-purple-600 text-white shadow-sm font-bold' : (isDark ? 'text-slate-400 hover:text-white' : 'text-slate-600 hover:text-slate-900')
-            }">
-            ${s.label}
-          </button>
-        `).join('')}
+      <!-- 策略模式选择药丸 (动态载入用户自定义策略) -->
+      <div class="flex items-center justify-between gap-2 p-1.5 rounded-xl border mb-3 ${isDark ? 'bg-slate-950/60 border-slate-800' : 'bg-slate-100 border-slate-200'}">
+        <div class="flex items-center gap-1.5 overflow-x-auto no-scrollbar py-0.5 min-w-0">
+          <span class="text-[10px] font-bold opacity-60 ml-1.5 mr-0.5 flex-shrink-0">策略模式:</span>
+          ${userAiPromptStrategies.map(s => `
+            <button onclick="setAiPromptStrategy('${win.id}', '${win.symbol}', '${s.id}')"
+              class="px-2.5 py-1 rounded-lg text-xs font-semibold whitespace-nowrap transition-all flex-shrink-0 ${
+                curStrategy === s.id ? 'bg-purple-600 text-white shadow-sm font-bold' : (isDark ? 'text-slate-400 hover:text-white' : 'text-slate-600 hover:text-slate-900')
+              }" title="${s.desc || s.name}">
+              ${s.name}
+            </button>
+          `).join('')}
+        </div>
+        <button onclick="openSettingsModal(); setTimeout(() => document.getElementById('setting-section-ai')?.scrollIntoView({ behavior: 'smooth' }), 100);" class="p-1 px-2 rounded-lg border text-[11px] font-semibold text-purple-400 hover:text-purple-300 hover:border-purple-500 transition-colors flex-shrink-0 ${isDark ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-300'}" title="管理与编辑 AI 提示词模板">
+          ⚙️ 提示词管理
+        </button>
       </div>
 
       <!-- 1. 量化多因子体检核心综述卡片 -->
@@ -2996,11 +3343,13 @@ function showToast(msg) {
   toast.style.opacity = '1';
   toast.style.transform = 'translateX(-50%) translateY(0)';
 
-  clearTimeout(window.__OMNI_TOAST_TIMER__);
-  window.__OMNI_TOAST_TIMER__ = setTimeout(() => {
-    toast.style.opacity = '0';
-    toast.style.transform = 'translateX(-50%) translateY(10px)';
-  }, 2800);
+  if (typeof clearTimeout === 'function') clearTimeout(window.__OMNI_TOAST_TIMER__);
+  if (typeof setTimeout === 'function') {
+    window.__OMNI_TOAST_TIMER__ = setTimeout(() => {
+      toast.style.opacity = '0';
+      toast.style.transform = 'translateX(-50%) translateY(10px)';
+    }, 2800);
+  }
 }
 
 // 渲染 ECharts 完整技术图表
@@ -3008,26 +3357,50 @@ async function renderChart(win) {
   const f10Container = document.getElementById(`f10-container-${win.id}`);
   const newsContainer = document.getElementById(`news-container-${win.id}`);
   const aiContainer = document.getElementById(`ai-container-${win.id}`);
+  const fundContainer = document.getElementById(`fundflow-container-${win.id}`);
+  const notesContainer = document.getElementById(`notes-container-${win.id}`);
   const chartDom = document.getElementById(`chart-${win.id}`);
   if (!chartDom) return;
 
   if (f10Container) f10Container.classList.add('hidden');
   if (newsContainer) newsContainer.classList.add('hidden');
   if (aiContainer) aiContainer.classList.add('hidden');
+  if (fundContainer) fundContainer.classList.add('hidden');
+  if (notesContainer) notesContainer.classList.add('hidden');
   chartDom.classList.remove('hidden');
+
+  const getECharts = () => typeof window !== 'undefined' && window.echarts ? window.echarts : (typeof echarts !== 'undefined' ? echarts : null);
+  let ec = getECharts();
+  if (!ec) {
+    let retries = 0;
+    const checkEc = () => {
+      ec = getECharts();
+      if (ec) {
+        renderChart(win);
+      } else if (retries < 40) {
+        retries++;
+        setTimeout(checkEc, 150);
+      } else {
+        const cDom = document.getElementById(`chart-${win.id}`);
+        if (cDom) cDom.innerHTML = `<div class="p-8 text-center text-xs text-red-400">ECharts 绘图库加载超时，请检查网络连接</div>`;
+      }
+    };
+    setTimeout(checkEc, 150);
+    return;
+  }
 
   if (win.chartInstance) {
     try {
       const oldDom = win.chartInstance.getDom();
       if (!document.contains(oldDom) || oldDom !== chartDom) {
         win.chartInstance.dispose();
-        win.chartInstance = echarts.init(chartDom);
+        win.chartInstance = ec.init(chartDom);
       }
     } catch (_) {
-      win.chartInstance = echarts.init(chartDom);
+      win.chartInstance = ec.init(chartDom);
     }
   } else {
-    win.chartInstance = echarts.init(chartDom);
+    win.chartInstance = ec.init(chartDom);
   }
 
   const isDark = theme === 'dark';
@@ -3418,6 +3791,11 @@ async function renderChart(win) {
         }
       });
     }
+
+    win.chartInstance.resize();
+    setTimeout(() => {
+      if (win.chartInstance) win.chartInstance.resize();
+    }, 60);
   } catch (err) {
     console.error('Render chart error:', err);
     win.chartInstance.hideLoading();
@@ -3494,12 +3872,25 @@ function updateChartHUD(win, bars, ind, idx) {
 
 // 走势图窗口控制
 function openChart(symbol, name, market) {
-  const existing = floatingWindows.find(w => w.symbol.toLowerCase() === symbol.toLowerCase());
+  if (!symbol) return;
+  const symKey = symbol.toLowerCase();
+  const existing = floatingWindows.find(w => w.symbol && w.symbol.toLowerCase() === symKey);
   if (existing) {
-    if (existing.isMinimized) {
+    const winEl = document.getElementById(existing.id);
+    if (!winEl) {
+      // DOM 节点丢失时，自动重新挂载到 DOM 中
+      let container = document.getElementById('floating-windows-container');
+      if (!container) {
+        renderInitialApp();
+        container = document.getElementById('floating-windows-container');
+      }
+      if (container) {
+        container.insertAdjacentHTML('beforeend', renderSingleWindowHtml(existing));
+        bindSingleWindowEvents(existing);
+      }
+    } else if (existing.isMinimized) {
       existing.isMinimized = false;
-      const winEl = document.getElementById(existing.id);
-      if (winEl) winEl.outerHTML = renderSingleWindowHtml(existing);
+      winEl.outerHTML = renderSingleWindowHtml(existing);
       bindSingleWindowEvents(existing);
     }
     focusWindow(existing.id);
@@ -3507,20 +3898,26 @@ function openChart(symbol, name, market) {
     return;
   }
 
-  topZIndex++;
+  topZIndex += 2;
   const offset = (floatingWindows.length % 5) * 28;
+  const safeSym = symbol.replace(/[^a-zA-Z0-9_]/g, '_');
+  const winWidth = Math.min(720, Math.max(380, window.innerWidth - 60));
+  const winHeight = Math.min(880, Math.max(480, window.innerHeight - 50));
+  const winX = Math.max(20, Math.min(window.innerWidth - winWidth - 20, 40 + offset));
+  const winY = Math.max(20, Math.min(window.innerHeight - winHeight - 20, 20 + offset));
+
   const newWin = {
-    id: `win_${symbol}_${Date.now()}`,
+    id: `win_${safeSym}_${Date.now()}`,
     symbol,
-    name,
+    name: name || symbol,
     market: market || 'A',
     period: 'intraday',
     mainIndicators: ['MA'],
     subIndicators: ['VOL', 'MACD', 'RSI', 'KDJ'],
-    x: 40 + offset,
-    y: 15 + offset,
-    width: Math.min(720, window.innerWidth - 40),
-    height: Math.min(940, window.innerHeight - 30),
+    x: winX,
+    y: winY,
+    width: winWidth,
+    height: winHeight,
     zIndex: topZIndex,
     isMinimized: false,
     isMaximized: false
@@ -3528,12 +3925,20 @@ function openChart(symbol, name, market) {
 
   floatingWindows.push(newWin);
 
-  const container = document.getElementById('floating-windows-container');
+  let container = document.getElementById('floating-windows-container');
+  if (!container) {
+    renderInitialApp();
+    container = document.getElementById('floating-windows-container');
+  }
   if (container) {
     container.insertAdjacentHTML('beforeend', renderSingleWindowHtml(newWin));
     bindSingleWindowEvents(newWin);
   }
   updateFooterManager();
+
+  fetchCachedQuote(symbol).then(q => {
+    if (q) updateOpenChartsQuotes();
+  });
 }
 
 function openBatchTiled() {
@@ -3554,7 +3959,7 @@ function closeWindow(id) {
 }
 
 function focusWindow(id) {
-  topZIndex++;
+  topZIndex += 2;
   const win = floatingWindows.find(w => w.id === id);
   if (win) win.zIndex = topZIndex;
   const winEl = document.getElementById(id);
@@ -3721,7 +4126,8 @@ function closeAllWindows() {
   floatingWindows.forEach(w => {
     if (w.chartInstance) w.chartInstance.dispose();
     const winEl = document.getElementById(w.id);
-    if (winEl) winEl.remove();
+    if (winEl && typeof winEl.remove === 'function') winEl.remove();
+    else if (winEl && winEl.parentNode) winEl.parentNode.removeChild(winEl);
   });
   floatingWindows = [];
   updateFooterManager();
@@ -3757,6 +4163,16 @@ function clearSearch() {
 // 确保在模块闭包或全局运行环境中，所有 HTML 内联事件与业务函数均能正常调用
 if (typeof window !== 'undefined') {
   Object.assign(window, {
+    get floatingWindows() { return floatingWindows; },
+    set floatingWindows(v) { floatingWindows = v; },
+    get watchlist() { return watchlist; },
+    set watchlist(v) { watchlist = v; },
+    get indices() { return indices; },
+    set indices(v) { indices = v; },
+    get isDrawerOpen() { return isDrawerOpen; },
+    set isDrawerOpen(v) { isDrawerOpen = v; },
+    get appSettings() { return appSettings; },
+    set appSettings(v) { appSettings = v; },
     fetchCachedF10,
     fetchCachedNews,
     fetchCachedKline,
@@ -3792,8 +4208,16 @@ if (typeof window !== 'undefined') {
     renderFundFlow,
     renderNotes,
     saveStockNote,
+    openAiStrategyModal,
+    closeAiStrategyModal,
+    saveAiStrategyFromModal,
+    deleteAiStrategy,
+    insertPromptPlaceholder,
+    resetAiStrategiesToDefault,
     setAiPromptStrategy,
     buildStrategyPrompt,
+    get userAiPromptStrategies() { return userAiPromptStrategies; },
+    DEFAULT_AI_PROMPT_STRATEGIES,
     updateChartHUD,
     renderPortfolioSummaryCard,
     checkPriceAlerts,
@@ -3808,6 +4232,7 @@ if (typeof window !== 'undefined') {
     getTrendBadgeClass,
     updateWatchlistDOM,
     updateRibbonDOM,
+    updateGlobalDOM,
     updateOpenChartsQuotes,
     renderInitialApp,
     renderFooterManagerHtml,

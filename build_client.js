@@ -42,11 +42,17 @@ window.__ModuleLoader__.load({
         document.head.appendChild(tw);
       }
 
-      // 2. 动态挂载 ECharts
-      if (!document.getElementById("dsh-echarts-cdn")) {
+      // 2. 动态挂载 ECharts (带国内多镜像 CDN 容灾降级)
+      if (!window.echarts && !document.getElementById("dsh-echarts-cdn")) {
         var ec = document.createElement("script");
         ec.id = "dsh-echarts-cdn";
         ec.src = "https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js";
+        ec.onerror = function() {
+          console.warn("[dsh-plugin-stock-x] jsdelivr 镜像加载异常，自动切换为 bootcdn 镜像");
+          var ec2 = document.createElement("script");
+          ec2.src = "https://cdn.bootcdn.net/ajax/libs/echarts/5.5.0/echarts.min.js";
+          document.head.appendChild(ec2);
+        };
         document.head.appendChild(ec);
       }
 
@@ -57,24 +63,13 @@ window.__ModuleLoader__.load({
         document.body.appendChild(rootDiv);
       }
 
-      // 4. 等待依赖就绪后，直接执行 indicators 与 app 脚本并挂载全局函数
-      function startCustomApp() {
-        if (!window.echarts) {
-          setTimeout(startCustomApp, 100);
-          return;
-        }
-        try {
-          // 注入指标计算库
-          (new Function(${JSON.stringify(indicatorsCode)}))();
-          // 注入完整自研工作台应用 (包含摸鱼悬浮球、8大全球指数、多窗口看板、量化诊断)
-          (new Function(${JSON.stringify(appCode)}))();
-          console.log("[dsh-plugin-stock-x] 摸鱼悬浮球与自选工作台已就绪");
-        } catch (err) {
-          console.error("[dsh-plugin-stock-x] 启动前端应用失败:", err);
-        }
+      // 4. 立即注入执行工作台核心引擎 (0ms 瞬间就绪，无需阻塞等待网络请求)
+      try {
+        (1, eval)(${JSON.stringify(indicatorsCode + '\n' + appCode)});
+        console.log("[dsh-plugin-stock-x] 摸鱼悬浮球与自选工作台已就绪");
+      } catch (err) {
+        console.error("[dsh-plugin-stock-x] 启动前端应用失败:", err);
       }
-
-      startCustomApp();
     }
 
     var name = "dsh-plugin-stock-x";

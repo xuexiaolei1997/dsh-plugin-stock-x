@@ -506,7 +506,7 @@ async function getStockKline(symbol, period = 'intraday', count = 120) {
   const ttl = (period === 'intraday' || period === '1m') ? 8000 : 60000;
 
   const cached = serverCache.kline.get(cacheKey);
-  if (cached && (now - cached.timestamp < ttl)) {
+  if (cached && cached.data && cached.data.length > 0 && (now - cached.timestamp < ttl)) {
     return cached.data;
   }
 
@@ -682,7 +682,33 @@ async function getStockKline(symbol, period = 'intraday', count = 120) {
         }
       } catch (_) {}
 
-      // 备用分时 (东财/新浪)
+      // 备用分时 (东财 trends2 1日分时权威走势)
+      try {
+        const secid = getEastmoneySecId(s);
+        if (secid) {
+          const emUrl = `https://push2his.eastmoney.com/api/qt/stock/trends2/get?secid=${secid}&ndays=1&fields1=f1,f2,f3,f4,f5,f6,f7,f8&fields2=f51,f52,f53,f54,f55,f56,f57,f58`;
+          const res = await fetchWithTimeout(emUrl, { headers: { 'User-Agent': 'Mozilla/5.0' } }, 5000);
+          const json = await res.json();
+          const trends = json.data?.trends || [];
+          if (trends.length > 0) {
+            return trends.map(line => {
+              const p = line.split(',');
+              const pr = parseFloat(p[2]) || 0;
+              return {
+                time: p[0].includes(' ') ? p[0].split(' ')[1].replace(':', '') : p[0],
+                open: parseFloat(p[1]) || pr,
+                close: pr,
+                high: parseFloat(p[3]) || pr,
+                low: parseFloat(p[4]) || pr,
+                volume: parseFloat(p[5]) || 0,
+                turnover: parseFloat(p[6]) || 0,
+                avg_price: parseFloat(p[7]) || pr
+              };
+            });
+          }
+        }
+      } catch (_) {}
+
       try {
         const emBars = await getEastmoneyKline(s, '5m', 60);
         if (emBars.length > 0) return emBars;
@@ -1180,21 +1206,24 @@ async function getGlobalIndices() {
 
   const promise = (async () => {
     try {
-      const emUrl = 'https://push2.eastmoney.com/api/qt/clist/get?pn=1&pz=20&po=1&np=1&fltt=2&invt=2&fid=f3&fs=i:1.000001,i:0.399001,i:0.399006,i:100.HSI,i:100.NDX,i:100.SPX,i:100.N225,i:100.KS11';
-      const res = await fetchWithTimeout(emUrl, { headers: { 'User-Agent': 'Mozilla/5.0' } }, 3500);
+      const emUrl = 'https://push2.eastmoney.com/api/qt/clist/get?pn=1&pz=30&po=1&np=1&fltt=2&invt=2&fid=f3&fs=i:1.000001,i:0.399001,i:0.399006,i:1.000688,i:100.HSI,i:100.NDX,i:100.SPX,i:100.N225,i:100.KS11,i:100.GDAXI,i:100.FCHI';
+      const res = await fetchWithTimeout(emUrl, { headers: { 'User-Agent': 'Mozilla/5.0' } }, 4000);
       const json = await res.json();
       const diff = json.data?.diff || [];
 
-      const orderKeys = ['000001', '399001', '399006', 'HSI', 'NDX', 'SPX', 'N225', 'KS11'];
+      const orderKeys = ['000001', '399001', '399006', '000688', 'HSI', 'NDX', 'SPX', 'N225', 'KS11', 'GDAXI', 'FCHI'];
       const metaMap = {
-        '000001': { symbol: 'sh000001', name: '上证指数', short: '上证', market: 'INDEX' },
-        '399001': { symbol: 'sz399001', name: '深证成指', short: '深证', market: 'INDEX' },
-        '399006': { symbol: 'sz399006', name: '创业板指', short: '创业板', market: 'INDEX' },
-        'HSI': { symbol: 'hkHSI', name: '恒生指数', short: '恒指', market: 'HK' },
-        'NDX': { symbol: 'usIXIC', name: '纳斯达克', short: '纳指', market: 'US' },
-        'SPX': { symbol: 'usINX', name: '标普500', short: '标普', market: 'US' },
-        'N225': { symbol: 'int_nikkei', name: '日经225', short: '日经', market: 'GLOBAL' },
-        'KS11': { symbol: 'int_kospi', name: '韩国综合', short: '韩国', market: 'GLOBAL' }
+        '000001': { symbol: 'sh000001', name: '上证指数', short: '上证', region: '🇨🇳 A股核心', market: 'INDEX' },
+        '399001': { symbol: 'sz399001', name: '深证成指', short: '深指', region: '🇨🇳 A股核心', market: 'INDEX' },
+        '399006': { symbol: 'sz399006', name: '创业板指', short: '创业板', region: '🇨🇳 A股核心', market: 'INDEX' },
+        '000688': { symbol: 'sh000688', name: '科创50', short: '科创50', region: '🇨🇳 A股核心', market: 'INDEX' },
+        'HSI': { symbol: 'hkHSI', name: '恒生指数', short: '恒指', region: '🇭🇰 港股基准', market: 'HK' },
+        'NDX': { symbol: 'usIXIC', name: '纳斯达克', short: '纳指', region: '🇺🇸 美股基准', market: 'US' },
+        'SPX': { symbol: 'usINX', name: '标普500', short: '标普', region: '🇺🇸 美股基准', market: 'US' },
+        'N225': { symbol: 'int_nikkei', name: '日经225', short: '日经', region: '🌏 亚太欧洲', market: 'GLOBAL' },
+        'KS11': { symbol: 'int_kospi', name: '韩国KOSPI', short: '韩国', region: '🌏 亚太欧洲', market: 'GLOBAL' },
+        'GDAXI': { symbol: 'int_gdaxi', name: '德国DAX30', short: '德国', region: '🌏 亚太欧洲', market: 'GLOBAL' },
+        'FCHI': { symbol: 'int_fchi', name: '法国CAC40', short: '法国', region: '🌏 亚太欧洲', market: 'GLOBAL' }
       };
 
       const mapResult = {};
@@ -1205,6 +1234,7 @@ async function getGlobalIndices() {
             symbol: meta.symbol,
             name: meta.name,
             short_name: meta.short,
+            region: meta.region,
             current_price: parseFloat(d.f2) || 0,
             change: parseFloat(d.f4) || 0,
             change_pct: parseFloat(d.f3) || 0,
