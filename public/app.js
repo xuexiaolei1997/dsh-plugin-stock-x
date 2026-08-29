@@ -271,6 +271,60 @@ window.addEventListener('resize', () => {
   });
 });
 
+// 全局交易员快捷键监听 (Esc 快速收起/关闭模态框, Space 快速顺次切股)
+window.addEventListener('keydown', (e) => {
+  const activeEl = document.activeElement;
+  const isInputActive = activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA');
+
+  if (e.key === 'Escape') {
+    if (appSettings.isSettingsOpen) {
+      closeSettingsModal();
+      return;
+    }
+    if (activeModalState.type === 'portfolio') {
+      closePortfolioModal();
+      return;
+    }
+    if (activeModalState.type === 'alert') {
+      closeAlertModal();
+      return;
+    }
+    const searchDropdown = document.getElementById('search-dropdown');
+    if (searchDropdown && !searchDropdown.classList.contains('hidden')) {
+      searchDropdown.classList.add('hidden');
+      return;
+    }
+    if (isDrawerOpen && !isInputActive) {
+      toggleMorphDrawer(false);
+      return;
+    }
+  }
+
+  if (e.key === ' ' && !isInputActive) {
+    if (watchlist.length > 0 && floatingWindows.length > 0) {
+      e.preventDefault();
+      const topWin = floatingWindows.reduce((prev, cur) => (cur.zIndex > prev.zIndex ? cur : prev), floatingWindows[0]);
+      if (topWin) {
+        const curIdx = watchlist.findIndex(w => w.symbol.toLowerCase() === topWin.symbol.toLowerCase());
+        const nextIdx = (curIdx + 1) % watchlist.length;
+        const nextStock = watchlist[nextIdx];
+        topWin.symbol = nextStock.symbol;
+        topWin.name = nextStock.name;
+        topWin.market = nextStock.market || 'A';
+        const winEl = document.getElementById(topWin.id);
+        if (winEl) {
+          winEl.outerHTML = renderSingleWindowHtml(topWin);
+          bindSingleWindowEvents(topWin);
+          if (topWin.period !== 'f10' && topWin.period !== 'news' && topWin.period !== 'ai') {
+            renderChart(topWin);
+          }
+        }
+        showToast(`⚡ 快捷切股:【${nextStock.name}】(${nextIdx + 1}/${watchlist.length})`);
+      }
+    }
+  }
+});
+
 function applyThemeAndFont() {
   const isDark = theme === 'dark';
   if (isDark) {
