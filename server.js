@@ -9,7 +9,10 @@ import {
   getCompanyF10,
   getStockNewsAndNotices,
   generateStockAIAnalysis,
-  getGlobalIndices
+  getGlobalIndices,
+  getHotSectors,
+  getSectorStocks,
+  getStockFundFlow
 } from './stock-api.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -168,6 +171,32 @@ const server = http.createServer(async (req, res) => {
     const aiData = await generateStockAIAnalysis(symbol);
     res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
     res.end(JSON.stringify({ data: aiData }));
+    return;
+  }
+
+  // 9. 热门行业与概念板块
+  if (subPath === '/sectors' || subPath === '/sectors/') {
+    const data = await getHotSectors();
+    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+    res.end(JSON.stringify({ data }));
+    return;
+  }
+
+  // 10. 板块成分股
+  if (subPath.startsWith('/sector-stocks')) {
+    const code = urlObj.searchParams.get('code') || '';
+    const data = await getSectorStocks(code);
+    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+    res.end(JSON.stringify({ data }));
+    return;
+  }
+
+  // 11. 个股资金流向
+  if (subPath.startsWith('/fund-flow/')) {
+    const symbol = subPath.replace('/fund-flow/', '');
+    const data = await getStockFundFlow(symbol);
+    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+    res.end(JSON.stringify({ data }));
     return;
   }
 

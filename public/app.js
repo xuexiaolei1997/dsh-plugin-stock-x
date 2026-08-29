@@ -47,37 +47,58 @@ function saveSettings() {
 
 loadSettings();
 
-// 个人持仓与价格预警数据管理
+// 个人持仓、价格预警、交易笔记与分类标签数据管理
 let userPortfolio = {};
 let userAlerts = {};
+let userNotes = {};
+let userTags = {};
 let alertedSessionKeys = new Set();
+let activeDrawerTab = 'watchlist'; // 'watchlist' | 'sectors'
+let activeSectorTab = 'industry';  // 'industry' | 'concept'
+let expandedSectorCode = null;
+let currentAiStrategy = 'general'; // 'general' | 'short_term' | 'value_invest' | 't_grid'
+
 let activeModalState = {
-  type: null, // 'portfolio' | 'alert'
+  type: null, // 'portfolio' | 'alert' | 'tag'
   symbol: '',
   name: '',
   curPrice: 0
 };
 
-function loadPortfolioAndAlerts() {
+const STOCK_TAG_OPTIONS = [
+  { id: 'core', label: '🔴 核心重仓', color: 'bg-red-500/15 text-red-400 border-red-500/30' },
+  { id: 'break', label: '🟡 突破观察', color: 'bg-amber-500/15 text-amber-400 border-amber-500/30' },
+  { id: 'momentum', label: '🟢 短线打板', color: 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30' },
+  { id: 'dip', label: '🟣 逢低低吸', color: 'bg-purple-500/15 text-purple-400 border-purple-500/30' },
+  { id: 'dca', label: '⚪ 长期定投', color: 'bg-slate-500/15 text-slate-300 border-slate-500/30' }
+];
+
+function loadLocalUserData() {
   try {
     userPortfolio = JSON.parse(localStorage.getItem('omnistock_portfolio') || '{}');
     userAlerts = JSON.parse(localStorage.getItem('omnistock_alerts') || '{}');
+    userNotes = JSON.parse(localStorage.getItem('omnistock_notes') || '{}');
+    userTags = JSON.parse(localStorage.getItem('omnistock_tags') || '{}');
   } catch (_) {}
 }
 
 function savePortfolio() {
-  try {
-    localStorage.setItem('omnistock_portfolio', JSON.stringify(userPortfolio));
-  } catch (_) {}
+  try { localStorage.setItem('omnistock_portfolio', JSON.stringify(userPortfolio)); } catch (_) {}
 }
 
 function saveAlerts() {
-  try {
-    localStorage.setItem('omnistock_alerts', JSON.stringify(userAlerts));
-  } catch (_) {}
+  try { localStorage.setItem('omnistock_alerts', JSON.stringify(userAlerts)); } catch (_) {}
 }
 
-loadPortfolioAndAlerts();
+function saveNotes() {
+  try { localStorage.setItem('omnistock_notes', JSON.stringify(userNotes)); } catch (_) {}
+}
+
+function saveTags() {
+  try { localStorage.setItem('omnistock_tags', JSON.stringify(userTags)); } catch (_) {}
+}
+
+loadLocalUserData();
 
 // 统一涨跌配色计算工具
 function getTrendColor(isUp) {
@@ -99,16 +120,64 @@ function getTrendBadgeClass(isUp) {
     : (isRedUp ? 'bg-emerald-500/10 text-emerald-500 border-emerald-500/20' : 'bg-red-500/10 text-red-500 border-red-500/20');
 }
 
-// 智能内存缓存系统 (F10: 10分钟, 新闻: 2分钟, K线: 15-60秒, AI分析: 5分钟)
+// 智能内存缓存系统 (F10: 10分钟, 新闻: 2分钟, K线: 15-60秒, AI分析: 5分钟, 板块: 15秒, 资金流: 30秒)
 const memoryCache = {
   f10: new Map(),
   news: new Map(),
   kline: new Map(),
-  ai: new Map()
+  ai: new Map(),
+  sectors: new Map(),
+  fundflow: new Map()
 };
 
 // 前端并发请求合并去重器 (防止同时多窗口重复请求相同数据)
 const clientInFlight = new Map();
+
+async function fetchCachedSectors() {
+  const cached = memoryCache.sectors.get('all');
+  if (cached && (Date.now() - cached.timestamp < 15 * 1000)) {
+    return cached.data;
+  }
+  try {
+    const res = await fetch('/dsh-plugin-stock-x/sectors').then(r => r.json());
+    if (res.data) {
+      memoryCache.sectors.set('all', { data: res.data, timestamp: Date.now() });
+      return res.data;
+    }
+  } catch (_) {}
+  return { industry: [], concept: [] };
+}
+
+async function fetchCachedSectorStocks(code) {
+  const cached = memoryCache.sectors.get(`stocks_${code}`);
+  if (cached && (Date.now() - cached.timestamp < 15 * 1000)) {
+    return cached.data;
+  }
+  try {
+    const res = await fetch(`/dsh-plugin-stock-x/sector-stocks?code=${code}`).then(r => r.json());
+    if (res.data) {
+      memoryCache.sectors.set(`stocks_${code}`, { data: res.data, timestamp: Date.now() });
+      return res.data;
+    }
+  } catch (_) {}
+  return [];
+}
+
+async function fetchCachedFundFlow(symbol) {
+  const key = symbol.toLowerCase();
+  const cached = memoryCache.fundflow.get(key);
+  if (cached && (Date.now() - cached.timestamp < 30 * 1000)) {
+    return cached.data;
+  }
+  try {
+    const res = await fetch(`/dsh-plugin-stock-x/fund-flow/${symbol}`).then(r => r.json());
+    if (res.data) {
+      memoryCache.fundflow.set(key, { data: res.data, timestamp: Date.now() });
+      return res.data;
+    }
+  } catch (_) {}
+  return null;
+}
 
 async function fetchCachedF10(symbol) {
   const key = symbol.toLowerCase();
@@ -804,6 +873,179 @@ function deleteAlertRule() {
   showToast(`🗑️ 已清除【${activeModalState.name}】预警规则！`);
 }
 
+function openTagModal(symbol, name) {
+  const sym = symbol.toLowerCase();
+  activeModalState = { type: 'tag', symbol: sym, name };
+  const modal = document.getElementById('omni-tag-modal');
+  if (modal) {
+    const titleEl = document.getElementById('tag-modal-title');
+    if (titleEl) titleEl.textContent = `🏷️ 为【${name} (${symbol})】设置分类标签`;
+    const curTag = userTags[sym] || '';
+    const container = document.getElementById('tag-options-container');
+    if (container) {
+      const isDark = theme === 'dark';
+      container.innerHTML = `
+        <div class="space-y-2">
+          <div onclick="setStockTag('${symbol}', '')" class="p-2.5 rounded-xl border cursor-pointer flex items-center justify-between transition-all ${
+            !curTag ? 'border-blue-500 bg-blue-500/10 font-bold' : (isDark ? 'border-slate-800 hover:bg-slate-800' : 'border-slate-200 hover:bg-slate-50')
+          }">
+            <span class="opacity-75">🚫 无标签 (清除)</span>
+            ${!curTag ? '<span class="text-blue-400 font-bold">✓</span>' : ''}
+          </div>
+          ${STOCK_TAG_OPTIONS.map(opt => `
+            <div onclick="setStockTag('${symbol}', '${opt.id}')" class="p-2.5 rounded-xl border cursor-pointer flex items-center justify-between transition-all ${
+              curTag === opt.id ? 'border-blue-500 bg-blue-500/10 font-bold' : (isDark ? 'border-slate-800 hover:bg-slate-800' : 'border-slate-200 hover:bg-slate-50')
+            }">
+              <span class="px-2.5 py-0.5 rounded-md border text-xs font-semibold ${opt.color}">${opt.label}</span>
+              ${curTag === opt.id ? '<span class="text-blue-400 font-bold">✓</span>' : ''}
+            </div>
+          `).join('')}
+        </div>
+      `;
+    }
+    modal.classList.remove('hidden');
+  }
+}
+
+function closeTagModal() {
+  activeModalState.type = null;
+  const modal = document.getElementById('omni-tag-modal');
+  if (modal) modal.classList.add('hidden');
+}
+
+function setStockTag(symbol, tagId) {
+  const sym = symbol.toLowerCase();
+  if (!tagId) {
+    delete userTags[sym];
+  } else {
+    userTags[sym] = tagId;
+  }
+  saveTags();
+  closeTagModal();
+  updateWatchlistDOM();
+  floatingWindows.forEach(w => {
+    if (w.symbol.toLowerCase() === sym && w.period === 'notes') {
+      renderNotes(w);
+    }
+  });
+  showToast(`🏷️ 已更新【${symbol}】分类标签！`);
+}
+
+function setDrawerTab(tab) {
+  activeDrawerTab = tab;
+  renderInitialApp();
+  if (tab === 'sectors') {
+    updateSectorsDOM();
+  }
+}
+
+function setSectorTab(tab) {
+  activeSectorTab = tab;
+  updateSectorsDOM();
+}
+
+async function toggleExpandSector(code) {
+  expandedSectorCode = expandedSectorCode === code ? null : code;
+  updateSectorsDOM();
+}
+
+async function updateSectorsDOM() {
+  const container = document.getElementById('sectors-items-container');
+  if (!container) return;
+  const isDark = theme === 'dark';
+  container.innerHTML = `<div class="p-8 text-center text-xs ${isDark ? 'text-slate-400' : 'text-slate-500'}">⏳ 正在获取全市场热门板块榜单...</div>`;
+
+  try {
+    const data = await fetchCachedSectors();
+    const list = activeSectorTab === 'industry' ? (data.industry || []) : (data.concept || []);
+
+    if (list.length === 0) {
+      container.innerHTML = `<div class="p-8 text-center text-xs ${isDark ? 'text-slate-400' : 'text-slate-500'}">暂无板块数据</div>`;
+      return;
+    }
+
+    container.innerHTML = `
+      <!-- 板块分类切换 -->
+      <div class="p-2 border-b flex items-center justify-center gap-2 ${isDark ? 'bg-slate-900 border-slate-800' : 'bg-slate-50 border-slate-200'}">
+        <button onclick="setSectorTab('industry')" class="px-4 py-1 rounded-lg text-xs font-semibold transition-all ${
+          activeSectorTab === 'industry' ? 'bg-blue-600 text-white shadow-sm' : (isDark ? 'text-slate-400 hover:bg-slate-800' : 'text-slate-600 hover:bg-slate-200')
+        }">
+          🏭 领涨行业板块
+        </button>
+        <button onclick="setSectorTab('concept')" class="px-4 py-1 rounded-lg text-xs font-semibold transition-all ${
+          activeSectorTab === 'concept' ? 'bg-purple-600 text-white shadow-sm' : (isDark ? 'text-slate-400 hover:bg-slate-800' : 'text-slate-600 hover:bg-slate-200')
+        }">
+          💡 热门概念题材
+        </button>
+      </div>
+
+      <div class="divide-y max-h-[360px] overflow-y-auto ${isDark ? 'divide-slate-800' : 'divide-slate-100'}">
+        ${list.map((sec, idx) => {
+          const isUp = sec.change_pct >= 0;
+          const isExp = expandedSectorCode === sec.code;
+          return `
+            <div class="p-3 transition-colors ${isDark ? 'hover:bg-slate-800/60' : 'hover:bg-slate-50'}">
+              <div class="flex items-center justify-between cursor-pointer select-none" onclick="toggleExpandSector('${sec.code}')">
+                <div class="flex items-center gap-2 min-w-0">
+                  <span class="w-5 h-5 rounded-md flex items-center justify-center text-[10px] font-bold ${
+                    idx < 3 ? 'bg-amber-500 text-white shadow-sm' : (isDark ? 'bg-slate-800 text-slate-400' : 'bg-slate-200 text-slate-600')
+                  }">${idx + 1}</span>
+                  <span class="font-bold text-sm truncate">${sec.name}</span>
+                </div>
+                <div class="flex items-center gap-3">
+                  <div class="text-right">
+                    <span class="font-mono font-bold text-sm ${getTrendTextClass(isUp)}">${isUp ? '+' : ''}${sec.change_pct.toFixed(2)}%</span>
+                    <div class="text-[10px] opacity-60">龙头: ${sec.lead_stock_name} (${(sec.lead_stock_pct >= 0 ? '+' : '') + sec.lead_stock_pct.toFixed(1)}%)</div>
+                  </div>
+                  <span class="text-xs opacity-50 transform transition-transform ${isExp ? 'rotate-180' : ''}">▼</span>
+                </div>
+              </div>
+
+              ${isExp ? `
+                <div id="sector-stocks-${sec.code}" class="mt-2.5 p-2 rounded-xl border ${isDark ? 'bg-slate-950/70 border-slate-800' : 'bg-slate-100/70 border-slate-200'}">
+                  <div class="text-[11px] opacity-60 font-bold mb-1.5 flex justify-between px-1">
+                    <span>板块领涨成分股</span>
+                    <span>现价 / 涨幅</span>
+                  </div>
+                  <div id="sector-stocks-list-${sec.code}">
+                    <div class="py-2 text-center text-xs opacity-60 animate-pulse">正在加载成分龙头股...</div>
+                  </div>
+                </div>
+              ` : ''}
+            </div>
+          `;
+        }).join('')}
+      </div>
+    `;
+
+    if (expandedSectorCode) {
+      fetchCachedSectorStocks(expandedSectorCode).then(stocks => {
+        const el = document.getElementById(`sector-stocks-list-${expandedSectorCode}`);
+        if (!el) return;
+        if (stocks.length === 0) {
+          el.innerHTML = `<div class="py-2 text-center text-xs opacity-60">暂无成分股</div>`;
+          return;
+        }
+        el.innerHTML = stocks.map(stk => `
+          <div class="flex items-center justify-between py-1 px-1.5 hover:bg-blue-500/10 rounded text-xs transition-colors">
+            <div class="flex items-center gap-1.5 min-w-0">
+              <span class="font-bold truncate">${stk.name}</span>
+              <span class="text-[10px] font-mono opacity-50">(${stk.symbol})</span>
+            </div>
+            <div class="flex items-center gap-2">
+              <span class="font-mono font-bold ${getTrendTextClass(stk.change_pct >= 0)}">¥${stk.price.toFixed(2)} (${stk.change_pct >= 0 ? '+' : ''}${stk.change_pct.toFixed(2)}%)</span>
+              <button onclick="openChart('${stk.symbol}', '${stk.name}', 'A')" class="p-1 rounded bg-blue-600/20 text-blue-400 hover:bg-blue-600 hover:text-white text-[10px]">📊看图</button>
+              <button onclick="addToWatchlist('${stk.symbol}', '${stk.name}', 'A')" class="p-1 rounded bg-emerald-600/20 text-emerald-400 hover:bg-emerald-600 hover:text-white text-[10px]">+自选</button>
+            </div>
+          </div>
+        `).join('');
+      });
+    }
+  } catch (err) {
+    container.innerHTML = `<div class="p-8 text-center text-xs text-red-400">获取板块榜单失败: ${err.message}</div>`;
+  }
+}
+
 let isRefreshing = false;
 async function refreshQuotesOnly() {
   if (isRefreshing) return;
@@ -873,6 +1115,8 @@ function updateWatchlistDOM() {
     const sign = isUp ? '+' : '';
     const pos = userPortfolio[item.symbol.toLowerCase()];
     const alert = userAlerts[item.symbol.toLowerCase()];
+    const tagId = userTags[item.symbol.toLowerCase()];
+    const tagObj = STOCK_TAG_OPTIONS.find(t => t.id === tagId);
 
     let posHtml = '';
     if (pos) {
@@ -900,6 +1144,7 @@ function updateWatchlistDOM() {
           <div class="truncate">
             <div class="flex items-center gap-1.5 truncate">
               <span class="font-bold text-sm group-hover:text-blue-500 transition-colors truncate ${isDark ? 'text-slate-100' : 'text-slate-900'}">${item.name}</span>
+              ${tagObj ? `<span onclick="event.stopPropagation(); openTagModal('${item.symbol}', '${item.name}')" class="text-[9px] px-1.5 py-0.2 rounded border font-semibold cursor-pointer ${tagObj.color}">${tagObj.label}</span>` : ''}
               ${alert ? `<span class="text-[10px] text-amber-400" title="已设置预警">🔔</span>` : ''}
             </div>
             <div class="text-xs font-mono opacity-60 ${isDark ? 'text-slate-400' : 'text-slate-500'}">${item.symbol}</div>
@@ -917,6 +1162,11 @@ function updateWatchlistDOM() {
         </div>
 
         <div class="flex items-center gap-1 ml-1 flex-shrink-0">
+          <button onclick="openTagModal('${item.symbol}', '${item.name}')"
+            class="p-1.5 rounded-lg ${tagObj ? 'bg-purple-600/20 text-purple-400 font-bold' : (isDark ? 'hover:bg-slate-800 text-slate-400' : 'hover:bg-slate-100 text-slate-500')} transition-all"
+            title="分类标签">
+            🏷️
+          </button>
           <button onclick="openPortfolioModal('${item.symbol}', '${item.name}', ${item.current_price || 0})"
             class="p-1.5 rounded-lg ${pos ? 'bg-blue-600/20 text-blue-400 font-bold' : (isDark ? 'hover:bg-slate-800 text-slate-400' : 'hover:bg-slate-100 text-slate-500')} transition-all"
             title="持仓记账与收益追踪">
@@ -965,50 +1215,7 @@ function updateRibbonDOM() {
       <div onclick="openChart('${idx.symbol}', '${idx.name}', '${idx.market}')"
         class="px-1.5 py-1 rounded-lg flex flex-col items-center justify-center cursor-pointer transition-all hover:scale-105 border ${
           isDark ? 'bg-slate-900 hover:bg-slate-800 border-slate-800 text-slate-100' : 'bg-white hover:bg-slate-100 border-slate-200 shadow-sm text-slate-800'
-        }" title="${idx.name} - 点击看图">
-        <div class="flex items-center justify-between w-full text-[10px] leading-tight">
-          <span class="truncate font-semibold opacity-80">${shortName}</span>
-          <span class="font-mono font-bold text-[9px] ${color}">${sign}${idx.change_pct ? idx.change_pct.toFixed(2) : '0.00'}%</span>
-        </div>
-        <div class="font-mono font-black text-[11px] ${color} mt-0.5 tracking-tighter w-full text-center truncate">
-          ${idx.current_price ? (idx.current_price >= 10000 ? idx.current_price.toFixed(0) : idx.current_price.toFixed(1)) : '--'}
-        </div>
-      </div>
-    `;
-  }).join('');
-}
-
-function updateOpenChartsQuotes() {
-  floatingWindows.forEach(win => {
-    const quote = watchlist.find(w => w.symbol.toLowerCase() === win.symbol.toLowerCase());
-    if (!quote) return;
-    const winEl = document.getElementById(win.id);
-    if (!winEl) return;
-    const isUp = (quote.change || 0) >= 0;
-    const color = getTrendTextClass(isUp);
-    const sign = isUp ? '+' : '';
-
-    const priceEl = winEl.querySelector('.quote-price');
-    if (priceEl) {
-      priceEl.textContent = quote.current_price ? quote.current_price.toFixed(2) : '--';
-      priceEl.className = `quote-price font-bold text-base ${color}`;
-    }
-    const pctEl = winEl.querySelector('.quote-pct');
-    if (pctEl) {
-      pctEl.textContent = `${sign}${quote.change_pct ? quote.change_pct.toFixed(2) : '0.00'}%`;
-      pctEl.className = `quote-pct font-bold text-base ${color}`;
-    }
-
-    if (win.showDepth) {
-      const depthPanel = document.getElementById(`depth-panel-${win.id}`);
-      if (depthPanel && quote.depth) {
-        depthPanel.outerHTML = renderDepthPanelHtml(win, quote);
-      }
-    }
-  });
-}
-
-// 页面基础框架渲染
+       // 页面基础框架渲染
 function renderInitialApp() {
   const isDark = theme === 'dark';
   let html = '';
@@ -1039,7 +1246,7 @@ function renderInitialApp() {
         <span class="absolute top-1.5 right-1.5 w-1.5 h-1.5 rounded-full bg-emerald-400/80"></span>
       </div>
 
-      <!-- 状态 B: 自选盯盘面板 (不透明纯色实底) -->
+      <!-- 状态 B: 自选盯盘/板块热点面板 (不透明纯色实底) -->
       <div id="morph-panel-view"
         style="opacity: ${isDrawerOpen ? 1 : 0}; transform: scale(${isDrawerOpen ? 1 : 0.94}); pointer-events: ${isDrawerOpen ? 'auto' : 'none'};"
         class="morph-view absolute inset-0 w-full h-full flex flex-col ${isDark ? 'bg-slate-900 text-slate-100' : 'bg-white text-slate-800'}">
@@ -1048,12 +1255,17 @@ function renderInitialApp() {
         <div id="panel-drag-header" class="px-4 py-3 border-b flex items-center justify-between cursor-move select-none ${
           isDark ? 'bg-slate-800 border-slate-700 text-slate-100' : 'bg-slate-100 border-slate-200 text-slate-800'
         }">
-          <div class="flex items-center gap-2">
-            <span class="w-6 h-6 rounded-lg bg-blue-600/20 text-blue-500 flex items-center justify-center text-sm font-bold">📈</span>
-            <span class="font-bold text-base">自选盯盘</span>
-            <span id="watchlist-count-badge" class="text-xs font-semibold px-2 py-0.5 rounded-full bg-blue-500/10 text-blue-400 border border-blue-500/20">
-              ${watchlist.length} 只
-            </span>
+          <div class="flex items-center gap-1.5 p-0.5 rounded-xl border ${isDark ? 'bg-slate-950/60 border-slate-700/60' : 'bg-slate-200/70 border-slate-300'}">
+            <button onclick="setDrawerTab('watchlist')" class="px-2.5 py-1 rounded-lg text-xs font-bold transition-all ${
+              activeDrawerTab === 'watchlist' ? 'bg-blue-600 text-white shadow-sm' : (isDark ? 'text-slate-400 hover:text-white' : 'text-slate-600 hover:text-slate-900')
+            }">
+              📈 自选 (${watchlist.length})
+            </button>
+            <button onclick="setDrawerTab('sectors')" class="px-2.5 py-1 rounded-lg text-xs font-bold transition-all ${
+              activeDrawerTab === 'sectors' ? 'bg-purple-600 text-white shadow-sm' : (isDark ? 'text-slate-400 hover:text-white' : 'text-slate-600 hover:text-slate-900')
+            }">
+              🔥 领涨热点
+            </button>
           </div>
 
           <div class="flex items-center gap-1.5 text-sm">
@@ -1089,52 +1301,59 @@ function renderInitialApp() {
           }"></div>
         </div>
 
-        <!-- 市场分类药丸与排序栏 -->
-        <div class="px-3 py-1.5 border-b flex items-center justify-between gap-1 text-[11px] ${
-          isDark ? 'bg-slate-900 border-slate-800' : 'bg-slate-50 border-slate-200'
-        }">
-          <div class="flex items-center gap-1">
-            ${[
-              { id: 'ALL', label: '全部' },
-              { id: 'A', label: 'A股' },
-              { id: 'HK', label: '港股' },
-              { id: 'US', label: '美股' },
-              { id: 'INDEX', label: '指数' }
-            ].map(tab => `
-              <button onclick="setMarketTab('${tab.id}')"
-                class="px-2 py-0.5 rounded-md font-semibold transition-all ${
-                  appSettings.activeMarketTab === tab.id
-                    ? 'bg-blue-600 text-white shadow-sm'
-                    : (isDark ? 'text-slate-400 hover:text-slate-200 hover:bg-slate-800' : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200')
+        ${activeDrawerTab === 'watchlist' ? `
+          <!-- 市场分类药丸与排序栏 -->
+          <div class="px-3 py-1.5 border-b flex items-center justify-between gap-1 text-[11px] ${
+            isDark ? 'bg-slate-900 border-slate-800' : 'bg-slate-50 border-slate-200'
+          }">
+            <div class="flex items-center gap-1">
+              ${[
+                { id: 'ALL', label: '全部' },
+                { id: 'A', label: 'A股' },
+                { id: 'HK', label: '港股' },
+                { id: 'US', label: '美股' },
+                { id: 'INDEX', label: '指数' }
+              ].map(tab => `
+                <button onclick="setMarketTab('${tab.id}')"
+                  class="px-2 py-0.5 rounded-md font-semibold transition-all ${
+                    appSettings.activeMarketTab === tab.id
+                      ? 'bg-blue-600 text-white shadow-sm'
+                      : (isDark ? 'text-slate-400 hover:text-slate-200 hover:bg-slate-800' : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200')
+                  }">
+                  ${tab.label}
+                </button>
+              `).join('')}
+            </div>
+
+            <div class="flex items-center gap-1">
+              <button onclick="toggleSortWatchlist()"
+                class="px-2 py-0.5 rounded-md font-semibold flex items-center gap-1 border transition-all ${
+                  appSettings.sortBy !== 'default'
+                    ? 'bg-indigo-600/15 text-indigo-400 border-indigo-500/30 font-bold'
+                    : (isDark ? 'bg-slate-800/80 text-slate-400 border-slate-700 hover:text-slate-200' : 'bg-white text-slate-600 border-slate-300 hover:text-slate-900')
                 }">
-                ${tab.label}
+                <span>${
+                  appSettings.sortBy === 'pct_desc' ? '涨幅 ⬇' :
+                  appSettings.sortBy === 'pct_asc' ? '跌幅 ⬆' :
+                  appSettings.sortBy === 'amount_desc' ? '成交额 💰' : '默认排序'
+                }</span>
               </button>
-            `).join('')}
+            </div>
           </div>
 
-          <div class="flex items-center gap-1">
-            <button onclick="toggleSortWatchlist()"
-              class="px-2 py-0.5 rounded-md font-semibold flex items-center gap-1 border transition-all ${
-                appSettings.sortBy !== 'default'
-                  ? 'bg-indigo-600/15 text-indigo-400 border-indigo-500/30 font-bold'
-                  : (isDark ? 'bg-slate-800/80 text-slate-400 border-slate-700 hover:text-slate-200' : 'bg-white text-slate-600 border-slate-300 hover:text-slate-900')
-              }">
-              <span>${
-                appSettings.sortBy === 'pct_desc' ? '涨幅 ⬇' :
-                appSettings.sortBy === 'pct_asc' ? '跌幅 ⬆' :
-                appSettings.sortBy === 'amount_desc' ? '成交额 💰' : '默认排序'
-              }</span>
-            </button>
-          </div>
-        </div>
+          <!-- 个人持仓总览卡片插槽 -->
+          <div id="portfolio-summary-slot"></div>
 
-        <!-- 个人持仓总览卡片插槽 -->
-        <div id="portfolio-summary-slot"></div>
-
-        <!-- 自选股票列表 (实色底色，不透明) -->
-        <div id="watchlist-items-container" class="flex-1 overflow-y-auto divide-y max-h-[300px] ${
-          isDark ? 'bg-slate-900 divide-slate-800' : 'bg-white divide-slate-100'
-        }"></div>
+          <!-- 自选股票列表 (实色底色，不透明) -->
+          <div id="watchlist-items-container" class="flex-1 overflow-y-auto divide-y max-h-[300px] ${
+            isDark ? 'bg-slate-900 divide-slate-800' : 'bg-white divide-slate-100'
+          }"></div>
+        ` : `
+          <!-- 全市场领涨行业与热门概念板块专属容器 -->
+          <div id="sectors-items-container" class="flex-1 overflow-y-auto ${
+            isDark ? 'bg-slate-900' : 'bg-white'
+          }"></div>
+        `}
 
         <!-- 底部窗口管理集成区 -->
         <div id="watchlist-footer-manager" class="p-2.5 border-t flex flex-col gap-2 text-xs ${
@@ -1224,7 +1443,7 @@ function renderInitialApp() {
             </div>
           </div>
 
-          <!-- 2. 行情轮询频率 -->
+          <!-- 3. 行情轮询频率 -->
           <div class="space-y-2">
             <label class="font-bold text-sm text-blue-500 block">⏱️ 行情自动刷新频率</label>
             <div class="grid grid-cols-4 gap-2 font-mono">
@@ -1234,8 +1453,8 @@ function renderInitialApp() {
                 { ms: 5000, label: '5秒 (省流)' },
                 { ms: 10000, label: '10秒' }
               ].map(opt => `
-                <button onclick="updateSetting('refreshInterval', ${opt.val})" class="py-2 rounded-xl border text-center font-semibold transition-all ${
-                  appSettings.refreshInterval === opt.val
+                <button onclick="updateSetting('refreshInterval', ${opt.ms})" class="py-2 rounded-xl border text-center font-semibold transition-all ${
+                  appSettings.refreshInterval === opt.ms
                     ? 'bg-blue-600 text-white border-blue-500 shadow-sm'
                     : (isDark ? 'bg-slate-950/40 border-slate-800 text-slate-300 hover:border-slate-700' : 'bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100')
                 }">${opt.label}</button>
@@ -1243,7 +1462,7 @@ function renderInitialApp() {
             </div>
           </div>
 
-          <!-- 3. 自选股批量导入与备份 -->
+          <!-- 4. 自选股批量导入与备份 -->
           <div class="space-y-2">
             <label class="font-bold text-sm text-purple-400 block">📦 自选股备份与批量导入</label>
             <div class="p-3.5 rounded-xl border space-y-3 ${isDark ? 'bg-slate-950/60 border-slate-800' : 'bg-slate-50 border-slate-200'}">
@@ -1342,6 +1561,19 @@ function renderInitialApp() {
         </div>
       </div>
     </div>
+
+    <!-- 5. 股票分类标签设置模态框 -->
+    <div id="omni-tag-modal" class="hidden fixed inset-0 z-[999999] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+      <div class="w-full max-w-xs rounded-2xl border shadow-2xl overflow-hidden flex flex-col ${
+        isDark ? 'bg-slate-900 border-slate-700 text-slate-100' : 'bg-white border-slate-300 text-slate-800'
+      }">
+        <div class="px-4 py-3 border-b flex items-center justify-between ${isDark ? 'bg-slate-800/80 border-slate-700' : 'bg-slate-100 border-slate-200'}">
+          <div id="tag-modal-title" class="font-bold text-xs text-blue-400">🏷️ 设置分类标签</div>
+          <button onclick="closeTagModal()" class="p-1 rounded-lg hover:bg-red-500/20 text-slate-400 hover:text-red-500 font-bold">✕</button>
+        </div>
+        <div id="tag-options-container" class="p-4 text-xs"></div>
+      </div>
+    </div>
   `;
 
   // 3. 走势图窗口容器
@@ -1358,7 +1590,12 @@ function renderInitialApp() {
     document.body.appendChild(root);
   }
   root.innerHTML = html;
-  updateWatchlistDOM();
+
+  if (activeDrawerTab === 'sectors') {
+    updateSectorsDOM();
+  } else {
+    updateWatchlistDOM();
+  }
   updateRibbonDOM();
   bindDrawerEvents();
 
@@ -1512,19 +1749,21 @@ function renderSingleWindowHtml(win) {
         ${renderWindowControlsHtml(win)}
       </div>
 
-      <!-- 图表 / F10 / 资讯 / AI分析 专属容器 -->
+      <!-- 图表 / F10 / 资讯 / AI分析 / 资金流向 / 交易笔记 专属容器 -->
       <div id="chart-container-${win.id}" class="flex-1 p-2.5 relative overflow-y-auto flex flex-col ${isDark ? 'bg-slate-950/40' : 'bg-slate-50/50'}">
         <!-- 实时 HUD 数据状态栏 (随十字光标高频跳动) -->
         <div id="hud-bar-${win.id}" class="px-3 py-1 mb-1.5 rounded-lg border text-[11px] font-mono flex items-center justify-between gap-2 overflow-x-auto select-none transition-all ${
           isDark ? 'bg-slate-900/90 border-slate-800 text-slate-300' : 'bg-white border-slate-200 text-slate-700 shadow-sm'
-        } ${win.period === 'f10' || win.period === 'news' || win.period === 'ai' ? 'hidden' : ''}">
+        } ${win.period === 'f10' || win.period === 'news' || win.period === 'ai' || win.period === 'fundflow' || win.period === 'notes' ? 'hidden' : ''}">
           <span class="opacity-70 text-[10px]">✨ 移动十字光标查看各周期量化指标动态</span>
         </div>
 
-        <div id="chart-${win.id}" class="w-full flex-1 ${win.period === 'f10' || win.period === 'news' || win.period === 'ai' ? 'hidden' : ''}"></div>
+        <div id="chart-${win.id}" class="w-full flex-1 ${win.period === 'f10' || win.period === 'news' || win.period === 'ai' || win.period === 'fundflow' || win.period === 'notes' ? 'hidden' : ''}"></div>
         <div id="f10-container-${win.id}" class="space-y-3.5 leading-relaxed ${win.period !== 'f10' ? 'hidden' : ''}"></div>
         <div id="news-container-${win.id}" class="space-y-3.5 leading-relaxed ${win.period !== 'news' ? 'hidden' : ''}"></div>
         <div id="ai-container-${win.id}" class="space-y-3.5 leading-relaxed ${win.period !== 'ai' ? 'hidden' : ''}"></div>
+        <div id="fundflow-container-${win.id}" class="space-y-3.5 leading-relaxed ${win.period !== 'fundflow' ? 'hidden' : ''}"></div>
+        <div id="notes-container-${win.id}" class="space-y-3.5 leading-relaxed ${win.period !== 'notes' ? 'hidden' : ''}"></div>
       </div>
     </div>
   `;
@@ -1540,6 +1779,7 @@ function renderWindowControlsHtml(win) {
           <span class="text-xs font-semibold opacity-60 mr-0.5">周期:</span>
           ${[
             { key: 'intraday', label: '分时' },
+            { key: '5day', label: '5日分时' },
             { key: 'daily', label: '日K' },
             { key: 'weekly', label: '周K' },
             { key: 'monthly', label: '月K' },
@@ -1549,12 +1789,12 @@ function renderWindowControlsHtml(win) {
             { key: '60m', label: '60m' }
           ].map(p => `
             <button onclick="setWindowPeriod('${win.id}', '${p.key}')" class="period-btn px-2.5 py-1 rounded-lg text-xs font-semibold transition-all ${
-              win.period === p.key ? 'bg-blue-600 text-white shadow-sm' : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'
+              win.period === p.key ? 'bg-blue-600 text-white shadow-sm' : (isDark ? 'text-slate-400 hover:text-slate-200 hover:bg-slate-800' : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200')
             }">${p.label}</button>
           `).join('')}
         </div>
 
-        ${win.period !== 'intraday' && win.period !== 'f10' && win.period !== 'news' && win.period !== 'ai' ? `
+        ${win.period !== 'intraday' && win.period !== '5day' && win.period !== 'f10' && win.period !== 'news' && win.period !== 'ai' && win.period !== 'fundflow' && win.period !== 'notes' ? `
           <div class="flex items-center gap-3">
             <div class="flex items-center gap-1.5">
               <span class="text-xs font-semibold opacity-60 mr-0.5">主图:</span>
@@ -1565,15 +1805,15 @@ function renderWindowControlsHtml(win) {
               ${['VOL', 'MACD', 'RSI', 'KDJ'].map(s => renderIndicatorBtn(win, s, 'sub', 'bg-emerald-600')).join('')}
             </div>
           </div>
-        ` : (win.period === 'intraday' ? `
+        ` : ((win.period === 'intraday' || win.period === '5day') ? `
           <div class="text-xs text-blue-400 flex items-center gap-3 font-semibold">
             <span class="flex items-center gap-1.5"><b class="w-3 h-0.5 bg-blue-500 inline-block"></b> 现价</span>
-            <span class="flex items-center gap-1.5"><b class="w-3 h-0.5 bg-amber-500 inline-block"></b> 分时均价</span>
+            <span class="flex items-center gap-1.5"><b class="w-3 h-0.5 bg-amber-500 inline-block"></b> 均价</span>
           </div>
         ` : `<div></div>`)}
       </div>
 
-      <!-- 第二行：F10档案、资讯公告、五档盘口与AI深度分析 -->
+      <!-- 第二行：F10档案、资讯公告、五档盘口、资金流向、交易笔记与AI深度分析 -->
       <div class="flex flex-wrap items-center justify-between gap-2 pt-2 border-t ${isDark ? 'border-slate-800/80' : 'border-slate-200/80'}">
         <div class="flex items-center gap-2">
           <span class="text-xs font-semibold text-purple-400 mr-0.5">深度投研:</span>
@@ -1582,17 +1822,27 @@ function renderWindowControlsHtml(win) {
           }" title="展开/收起五档买卖深度挂单盘口">
             <span>📊 五档盘口</span>
           </button>
-          <button onclick="setWindowPeriod('${win.id}', 'f10')" class="px-3 py-1 rounded-lg text-xs font-semibold transition-all flex items-center gap-1 ${
+          <button onclick="setWindowPeriod('${win.id}', 'fundflow')" class="px-2.5 py-1 rounded-lg text-xs font-semibold transition-all flex items-center gap-1 ${
+            win.period === 'fundflow' ? 'bg-blue-600 text-white shadow-sm font-bold' : (isDark ? 'bg-slate-800/80 text-slate-300 hover:text-white hover:bg-slate-700' : 'bg-slate-100 text-slate-700 hover:bg-slate-200')
+          }" title="主力资金净流入与散户博弈">
+            <span>🌊 资金流向</span>
+          </button>
+          <button onclick="setWindowPeriod('${win.id}', 'f10')" class="px-2.5 py-1 rounded-lg text-xs font-semibold transition-all flex items-center gap-1 ${
             win.period === 'f10' ? 'bg-blue-600 text-white shadow-sm font-bold' : (isDark ? 'bg-slate-800/80 text-slate-300 hover:text-white hover:bg-slate-700' : 'bg-slate-100 text-slate-700 hover:bg-slate-200')
           }">
-            <span>📑 F10公司档案</span>
+            <span>📑 F10档案</span>
           </button>
-          <button onclick="setWindowPeriod('${win.id}', 'news')" class="px-3 py-1 rounded-lg text-xs font-semibold transition-all flex items-center gap-1 ${
+          <button onclick="setWindowPeriod('${win.id}', 'news')" class="px-2.5 py-1 rounded-lg text-xs font-semibold transition-all flex items-center gap-1 ${
             win.period === 'news' ? 'bg-blue-600 text-white shadow-sm font-bold' : (isDark ? 'bg-slate-800/80 text-slate-300 hover:text-white hover:bg-slate-700' : 'bg-slate-100 text-slate-700 hover:bg-slate-200')
           }">
-            <span>📰 即时资讯与公告</span>
+            <span>📰 资讯公告</span>
           </button>
-          <button onclick="setWindowPeriod('${win.id}', 'ai')" class="px-3.5 py-1 rounded-lg text-xs font-bold transition-all flex items-center gap-1 shadow-sm ${
+          <button onclick="setWindowPeriod('${win.id}', 'notes')" class="px-2.5 py-1 rounded-lg text-xs font-semibold transition-all flex items-center gap-1 ${
+            win.period === 'notes' ? 'bg-blue-600 text-white shadow-sm font-bold' : (isDark ? 'bg-slate-800/80 text-slate-300 hover:text-white hover:bg-slate-700' : 'bg-slate-100 text-slate-700 hover:bg-slate-200')
+          }" title="记录买入逻辑与复盘备忘">
+            <span>📝 交易笔记</span>
+          </button>
+          <button onclick="setWindowPeriod('${win.id}', 'ai')" class="px-3 py-1 rounded-lg text-xs font-bold transition-all flex items-center gap-1 shadow-sm ${
             win.period === 'ai'
               ? 'bg-gradient-to-r from-purple-600 to-indigo-600 text-white shadow-md shadow-indigo-500/25 ring-2 ring-purple-400/30'
               : 'bg-purple-950/40 text-purple-300 border border-purple-800/40 hover:bg-purple-900/60 hover:text-white'
@@ -1602,7 +1852,7 @@ function renderWindowControlsHtml(win) {
         </div>
 
         <div class="text-xs font-medium ${isDark ? 'text-slate-400' : 'text-slate-500'}">
-          ${win.period === 'f10' ? '🏢 企业基本面与财务中枢' : (win.period === 'news' ? '⚡ 即时热点新闻 & 官方公告' : (win.period === 'ai' ? '📐 规则多因子量化诊断模型' : '📈 专业技术走势图'))}
+          ${win.period === 'f10' ? '🏢 企业基本面与财务中枢' : (win.period === 'news' ? '⚡ 即时热点新闻 & 官方公告' : (win.period === 'fundflow' ? '🌊 主力大单博弈与资金流向' : (win.period === 'notes' ? '📝 个人交易复盘备忘' : (win.period === 'ai' ? '📐 规则多因子量化诊断模型' : '📈 专业技术走势图'))))}
         </div>
       </div>
     </div>
@@ -2148,6 +2398,262 @@ async function renderAIAnalysis(win) {
   if (newsContainer) newsContainer.classList.add('hidden');
   container.classList.remove('hidden');
 
+// 🌊 渲染主力与散户资金流向面板
+async function renderFundFlow(win) {
+  const chartEl = document.getElementById(`chart-${win.id}`);
+  const hudEl = document.getElementById(`hud-bar-${win.id}`);
+  const f10Container = document.getElementById(`f10-container-${win.id}`);
+  const newsContainer = document.getElementById(`news-container-${win.id}`);
+  const aiContainer = document.getElementById(`ai-container-${win.id}`);
+  const fundContainer = document.getElementById(`fundflow-container-${win.id}`);
+  const notesContainer = document.getElementById(`notes-container-${win.id}`);
+
+  if (chartEl) chartEl.classList.add('hidden');
+  if (hudEl) hudEl.classList.add('hidden');
+  if (f10Container) f10Container.classList.add('hidden');
+  if (newsContainer) newsContainer.classList.add('hidden');
+  if (aiContainer) aiContainer.classList.add('hidden');
+  if (notesContainer) notesContainer.classList.add('hidden');
+  if (!fundContainer) return;
+  fundContainer.classList.remove('hidden');
+
+  const isDark = theme === 'dark';
+  fundContainer.innerHTML = `<div class="p-8 text-center text-sm ${isDark ? 'text-slate-400' : 'text-slate-500'}">⏳ 正在获取【${win.name}】主力与散户资金流向数据...</div>`;
+
+  try {
+    const data = await fetchCachedFundFlow(win.symbol);
+    if (!data || !data.latest) {
+      fundContainer.innerHTML = `<div class="p-8 text-center text-sm ${isDark ? 'text-slate-400' : 'text-slate-500'}">暂无该标的资金流向数据（指数或部分海外标的不提供资金流向明细）</div>`;
+      return;
+    }
+
+    const cur = data.latest;
+    const isMainIn = cur.main_inflow >= 0;
+    const formatYuan = (n) => {
+      const abs = Math.abs(n);
+      const sign = n >= 0 ? '+' : '-';
+      if (abs >= 100000000) return `${sign}¥${(abs / 100000000).toFixed(2)}亿`;
+      if (abs >= 10000) return `${sign}¥${(abs / 10000).toFixed(1)}万`;
+      return `${sign}¥${abs.toFixed(0)}`;
+    };
+
+    fundContainer.innerHTML = `
+      <!-- 主力资金概览卡片 -->
+      <div class="p-4 rounded-2xl border ${isDark ? 'bg-slate-900/90 border-slate-800' : 'bg-white border-slate-200 shadow-sm'}">
+        <div class="flex items-center justify-between mb-3">
+          <div class="flex items-center gap-2">
+            <span class="font-extrabold text-sm text-blue-400">🌊 今日主力资金多空博弈</span>
+            <span class="text-[10px] px-2 py-0.5 rounded-full font-mono font-bold ${isMainIn ? getTrendBadgeClass(true) : getTrendBadgeClass(false)}">
+              ${isMainIn ? '🔥 主力净流入' : '⚠️ 主力净流出'}
+            </span>
+          </div>
+          <span class="text-xs font-mono opacity-60">${cur.date}</span>
+        </div>
+
+        <div class="grid grid-cols-2 gap-3 mb-4">
+          <div class="p-3 rounded-xl border ${isDark ? 'bg-slate-950/60 border-slate-800' : 'bg-slate-50 border-slate-200'}">
+            <span class="text-xs block opacity-60 mb-0.5">主力净流入 (超大单+大单)</span>
+            <span class="font-mono font-black text-base ${getTrendTextClass(isMainIn)}">${formatYuan(cur.main_inflow)}</span>
+          </div>
+          <div class="p-3 rounded-xl border ${isDark ? 'bg-slate-950/60 border-slate-800' : 'bg-slate-50 border-slate-200'}">
+            <span class="text-xs block opacity-60 mb-0.5">散户净流入 (小单)</span>
+            <span class="font-mono font-black text-base ${getTrendTextClass(cur.small_inflow >= 0)}">${formatYuan(cur.small_inflow)}</span>
+          </div>
+        </div>
+
+        <!-- 资金四档占比条 -->
+        <div class="space-y-2 text-xs">
+          <div class="flex justify-between font-semibold">
+            <span>超大单净额: <b class="${getTrendTextClass(cur.super_large_inflow >= 0)}">${formatYuan(cur.super_large_inflow)}</b></span>
+            <span class="opacity-70">${data.ratios.super_large}%</span>
+          </div>
+          <div class="flex justify-between font-semibold">
+            <span>大单净额: <b class="${getTrendTextClass(cur.large_inflow >= 0)}">${formatYuan(cur.large_inflow)}</b></span>
+            <span class="opacity-70">${data.ratios.large}%</span>
+          </div>
+          <div class="flex justify-between font-semibold">
+            <span>中单净额: <b class="${getTrendTextClass(cur.medium_inflow >= 0)}">${formatYuan(cur.medium_inflow)}</b></span>
+            <span class="opacity-70">${data.ratios.medium}%</span>
+          </div>
+          <div class="flex justify-between font-semibold">
+            <span>小单净额: <b class="${getTrendTextClass(cur.small_inflow >= 0)}">${formatYuan(cur.small_inflow)}</b></span>
+            <span class="opacity-70">${data.ratios.small}%</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- 近5日资金流向历史趋势 -->
+      <div class="p-4 rounded-2xl border ${isDark ? 'bg-slate-900/90 border-slate-800' : 'bg-white border-slate-200 shadow-sm'}">
+        <div class="font-bold text-sm text-indigo-400 mb-3">📅 近5日主力资金流向趋势</div>
+        <div class="divide-y font-mono text-xs ${isDark ? 'divide-slate-800' : 'divide-slate-100'}">
+          ${data.history.slice(-5).reverse().map(h => `
+            <div class="py-2 flex items-center justify-between">
+              <span class="opacity-70">${h.date}</span>
+              <span class="font-bold ${getTrendTextClass(h.main_inflow >= 0)}">${formatYuan(h.main_inflow)}</span>
+              <span class="text-[11px] opacity-60">散户:${formatYuan(h.small_inflow)}</span>
+            </div>
+          `).join('')}
+        </div>
+      </div>
+    `;
+  } catch (err) {
+    fundContainer.innerHTML = `<div class="p-8 text-center text-sm text-red-400">加载资金流向失败: ${err.message}</div>`;
+  }
+}
+
+// 📝 渲染个股交易逻辑与复盘备忘笔记
+function renderNotes(win) {
+  const chartEl = document.getElementById(`chart-${win.id}`);
+  const hudEl = document.getElementById(`hud-bar-${win.id}`);
+  const f10Container = document.getElementById(`f10-container-${win.id}`);
+  const newsContainer = document.getElementById(`news-container-${win.id}`);
+  const aiContainer = document.getElementById(`ai-container-${win.id}`);
+  const fundContainer = document.getElementById(`fundflow-container-${win.id}`);
+  const notesContainer = document.getElementById(`notes-container-${win.id}`);
+
+  if (chartEl) chartEl.classList.add('hidden');
+  if (hudEl) hudEl.classList.add('hidden');
+  if (f10Container) f10Container.classList.add('hidden');
+  if (newsContainer) newsContainer.classList.add('hidden');
+  if (aiContainer) aiContainer.classList.add('hidden');
+  if (fundContainer) fundContainer.classList.add('hidden');
+  if (!notesContainer) return;
+  notesContainer.classList.remove('hidden');
+
+  const isDark = theme === 'dark';
+  const sym = win.symbol.toLowerCase();
+  const noteObj = userNotes[sym] || { content: '', updatedAt: null };
+  const currentTagId = userTags[sym] || null;
+  const currentTag = STOCK_TAG_OPTIONS.find(t => t.id === currentTagId);
+
+  notesContainer.innerHTML = `
+    <div class="p-4 rounded-2xl border space-y-4 ${isDark ? 'bg-slate-900/90 border-slate-800' : 'bg-white border-slate-200 shadow-sm'}">
+      <div class="flex items-center justify-between">
+        <div class="flex items-center gap-2">
+          <span class="font-extrabold text-sm text-blue-400">📝 【${win.name}】交易逻辑与复盘备忘</span>
+          ${currentTag ? `<span class="text-xs px-2 py-0.5 rounded-md border font-semibold ${currentTag.color}">${currentTag.label}</span>` : ''}
+        </div>
+        <button onclick="openTagModal('${win.symbol}', '${win.name}')" class="px-2.5 py-1 rounded-lg border text-xs font-semibold hover:border-blue-500 transition-colors ${isDark ? 'bg-slate-800 border-slate-700' : 'bg-slate-100 border-slate-200'}">
+          🏷️ 设置标签
+        </button>
+      </div>
+
+      <div>
+        <textarea id="note-input-${win.id}" rows="6" placeholder="记录你关注或买入该股票的核心逻辑、技术买点、止盈目标、止损计划与复盘心得..." class="w-full p-3 rounded-xl border font-sans text-xs focus:outline-none focus:border-blue-500 leading-relaxed ${
+          isDark ? 'bg-slate-950/70 border-slate-800 text-slate-100 placeholder-slate-500' : 'bg-slate-50 border-slate-300 text-slate-900 placeholder-slate-400'
+        }">${noteObj.content || ''}</textarea>
+        <div class="flex items-center justify-between mt-2">
+          <span class="text-[11px] opacity-60">
+            ${noteObj.updatedAt ? `🕒 最后更新: ${noteObj.updatedAt}` : '💡 内容加密保存在本地，绝不上云'}
+          </span>
+          <button onclick="saveStockNote('${win.id}', '${win.symbol}')" class="px-4 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs shadow-md">
+            💾 保存笔记
+          </button>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function saveStockNote(winId, symbol) {
+  const input = document.getElementById(`note-input-${winId}`);
+  if (!input) return;
+  const content = input.value.trim();
+  const sym = symbol.toLowerCase();
+  const timeStr = new Date().toLocaleString();
+  userNotes[sym] = { content, updatedAt: timeStr };
+  saveNotes();
+  showToast(`✅ 已保存【${symbol}】交易复盘笔记！`);
+  const win = floatingWindows.find(w => w.id === winId);
+  if (win && win.period === 'notes') renderNotes(win);
+}
+
+// 策略定制提示词构造器
+function buildStrategyPrompt(symbol, name, aiData, quote, newsList, strategy = 'general') {
+  const isUp = (quote.change || 0) >= 0;
+  const sign = isUp ? '+' : '';
+  const baseInfo = `【${name} (${symbol}) 股票实时投研诊断与交易决策咨询】
+- 最新现价: ¥${quote.current_price?.toFixed(2) || '--'} (今日涨跌: ${sign}${quote.change_pct?.toFixed(2) || '0.00'}%)
+- 今开 / 昨收: ¥${quote.open?.toFixed(2) || '--'} / ¥${quote.prev_close?.toFixed(2) || '--'}
+- 最高 / 最低: ¥${quote.high?.toFixed(2) || '--'} / ¥${quote.low?.toFixed(2) || '--'}
+- 换手率: ${quote.turnover_rate ? quote.turnover_rate.toFixed(2) + '%' : '--'}，成交额: ${quote.turnover ? '¥' + (quote.turnover / 100000000).toFixed(2) + '亿' : '--'}
+- 市盈率(PE): ${quote.pe_ratio?.toFixed(1) || '--'}，市净率(PB): ${quote.pb_ratio?.toFixed(1) || '--'}，总市值: ${quote.market_cap ? quote.market_cap.toFixed(0) + '亿' : '--'}`;
+
+  const newsStr = newsList && newsList.length > 0
+    ? `\n最新资讯动态 (附源链接):\n${newsList.slice(0, 3).map((n, i) => `${i+1}. [${n.media}] [${n.title}](${n.url})`).join('\n')}\n`
+    : '';
+
+  if (strategy === 'short_term') {
+    return `${baseInfo}
+${newsStr}
+【短线打板与动量攻防策略咨询】
+请结合当前的分时量价异动、技术均线突破与日内盘口博弈，重点分析：
+1. 关键突破压力位与短线回调支撑位；
+2. 短线动量是否具备持续性（多空力量对比）；
+3. 明确的短线买入触发条件与严格纪律止损位 (-3% ~ -5%)。`;
+  }
+
+  if (strategy === 'value_invest') {
+    return `${baseInfo}
+${newsStr}
+【价值投资与长期基本面估值咨询】
+请结合公司的行业地位、财务估值中枢与长期成长性，重点分析：
+1. 当前 PE / PB 估值所处历史百分位及安全边际；
+2. 公司核心商业壁垒与未来 1~3 年业绩增长确定性；
+3. 分批定投或长期持有的仓位建仓策略。`;
+  }
+
+  if (strategy === 't_grid') {
+    return `${baseInfo}
+${newsStr}
+【套牢自救与日内网格做T策略咨询】
+请结合当前的振幅特征与分时均价波动，重点分析：
+1. 日内做T的高抛低吸关键点位（日内阻力/支撑）；
+2. 网格交易区间与分批补仓间距建议；
+3. 如何在控制总仓位风险的前提下快速降低持仓成本。`;
+  }
+
+  // 默认全景综合
+  if (aiData && aiData.prompt_report) {
+    return aiData.prompt_report;
+  }
+
+  return `${baseInfo}
+${newsStr}
+请结合以上实时行情盘口与量化特征，深度分析：
+1. 短线走势与多空动能（阻力位、支撑位、止损位设定）；
+2. 中长线基本面估值与行业景气度评估；
+3. 具体的仓位管理与操作策略建议。`;
+}
+
+function setAiPromptStrategy(winId, symbol, strategyKey) {
+  const win = floatingWindows.find(w => w.id === winId);
+  if (win) {
+    win.aiStrategy = strategyKey;
+    renderAIAnalysis(win);
+  }
+}
+
+// 🌟 渲染全景 AI 智能量化与基本面深度研报诊断看板
+async function renderAIAnalysis(win) {
+  const chartEl = document.getElementById(`chart-${win.id}`);
+  const hudEl = document.getElementById(`hud-bar-${win.id}`);
+  const f10Container = document.getElementById(`f10-container-${win.id}`);
+  const newsContainer = document.getElementById(`news-container-${win.id}`);
+  const fundContainer = document.getElementById(`fundflow-container-${win.id}`);
+  const notesContainer = document.getElementById(`notes-container-${win.id}`);
+  const container = document.getElementById(`ai-container-${win.id}`);
+  if (!container) return;
+  const isDark = theme === 'dark';
+
+  if (chartEl) chartEl.classList.add('hidden');
+  if (hudEl) hudEl.classList.add('hidden');
+  if (f10Container) f10Container.classList.add('hidden');
+  if (newsContainer) newsContainer.classList.add('hidden');
+  if (fundContainer) fundContainer.classList.add('hidden');
+  if (notesContainer) notesContainer.classList.add('hidden');
+  container.classList.remove('hidden');
+
   const key = win.symbol.toLowerCase();
   const hasCache = memoryCache.ai.has(key);
   if (!hasCache && !container.innerHTML.includes('🤖')) {
@@ -2161,13 +2667,38 @@ async function renderAIAnalysis(win) {
   }
 
   try {
-    const ai = await fetchCachedAIAnalysis(win.symbol);
+    const [ai, nData] = await Promise.all([
+      fetchCachedAIAnalysis(win.symbol),
+      fetchCachedNews(win.symbol, win.name)
+    ]);
     if (!ai) {
       container.innerHTML = `<div class="p-8 text-center text-sm text-slate-400">未能生成该股票的 AI 诊断分析</div>`;
       return;
     }
 
+    const curStrategy = win.aiStrategy || 'general';
+    const quote = watchlist.find(w => w.symbol.toLowerCase() === win.symbol.toLowerCase()) || {};
+    const promptContent = buildStrategyPrompt(win.symbol, win.name, ai, quote, nData?.news || [], curStrategy);
+
     container.innerHTML = `
+      <!-- 策略模式选择药丸 -->
+      <div class="flex items-center gap-1.5 p-1 rounded-xl border mb-3 ${isDark ? 'bg-slate-950/60 border-slate-800' : 'bg-slate-100 border-slate-200'}">
+        <span class="text-[10px] font-bold opacity-60 ml-2 mr-1">策略模式:</span>
+        ${[
+          { key: 'general', label: '🎯 全景投研' },
+          { key: 'short_term', label: '⚡ 短线攻防' },
+          { key: 'value_invest', label: '💎 价值长线' },
+          { key: 't_grid', label: '🔄 做T解套' }
+        ].map(s => `
+          <button onclick="setAiPromptStrategy('${win.id}', '${win.symbol}', '${s.key}')"
+            class="px-2.5 py-1 rounded-lg text-xs font-semibold transition-all ${
+              curStrategy === s.key ? 'bg-purple-600 text-white shadow-sm font-bold' : (isDark ? 'text-slate-400 hover:text-white' : 'text-slate-600 hover:text-slate-900')
+            }">
+            ${s.label}
+          </button>
+        `).join('')}
+      </div>
+
       <!-- 1. 量化多因子体检核心综述卡片 -->
       <div class="p-4 rounded-2xl border relative overflow-hidden ${
         isDark ? 'bg-gradient-to-br from-purple-950/40 via-slate-900/90 to-indigo-950/40 border-purple-800/50 shadow-xl' : 'bg-gradient-to-br from-purple-50 via-white to-indigo-50 border-purple-200 shadow-xl'
@@ -2190,10 +2721,10 @@ async function renderAIAnalysis(win) {
           </div>
 
           <div class="flex items-center gap-2">
-            <button onclick="sendStockToDSHChat('${win.symbol}', '${win.name}', false)" class="px-3 py-1.5 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-bold text-xs shadow-lg shadow-blue-500/25 flex items-center gap-1 transition-all hover:scale-105" title="将个股研报直接填入 DSH 对话框">
+            <button onclick="sendStockToDSHChat('${win.symbol}', '${win.name}', false, '${curStrategy}')" class="px-3 py-1.5 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-bold text-xs shadow-lg shadow-blue-500/25 flex items-center gap-1 transition-all hover:scale-105" title="将个股研报直接填入 DSH 对话框">
               <span>💬 填入聊天框</span>
             </button>
-            <button onclick="sendStockToDSHChat('${win.symbol}', '${win.name}', true)" class="px-3 py-1.5 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-bold text-xs shadow-lg shadow-emerald-500/25 flex items-center gap-1 transition-all hover:scale-105" title="填入并直接发送给 AI 提问">
+            <button onclick="sendStockToDSHChat('${win.symbol}', '${win.name}', true, '${curStrategy}')" class="px-3 py-1.5 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-bold text-xs shadow-lg shadow-emerald-500/25 flex items-center gap-1 transition-all hover:scale-105" title="填入并直接发送给 AI 提问">
               <span>⚡ 一键提问AI</span>
             </button>
             <button onclick="copyStockAIPrompt('${win.id}')" class="px-3 py-1.5 rounded-xl bg-purple-600/20 hover:bg-purple-600 text-purple-300 hover:text-white font-bold text-xs border border-purple-500/30 flex items-center gap-1 transition-all" title="复制全量数据包">
@@ -2261,7 +2792,7 @@ async function renderAIAnalysis(win) {
       <div class="p-4 rounded-xl border ${isDark ? 'bg-slate-900/80 border-slate-800' : 'bg-white border-slate-200'}">
         <div class="flex items-center justify-between mb-2">
           <div class="font-bold text-sm text-purple-400 flex items-center gap-1.5">
-            <span>📝 完整投研数据包与 AI 提示词 (一键复制喂给 AI)</span>
+            <span>📝 完整投研数据包与 AI 提示词 (${curStrategy})</span>
           </div>
           <button onclick="copyStockAIPrompt('${win.id}')" class="px-3 py-1 rounded-lg bg-blue-600/20 hover:bg-blue-600 text-blue-400 hover:text-white font-bold text-xs transition-all">
             📋 复制数据包
@@ -2270,7 +2801,7 @@ async function renderAIAnalysis(win) {
         <textarea id="ai-prompt-text-${win.id}" readonly
           class="w-full h-40 p-3 rounded-xl font-mono text-xs border focus:outline-none resize-none select-all ${
             isDark ? 'bg-slate-950 border-slate-800 text-slate-300' : 'bg-slate-50 border-slate-300 text-slate-800'
-          }">${ai.prompt_report}</textarea>
+          }">${promptContent}</textarea>
         <div class="text-[11px] opacity-60 mt-1.5">💡 提示：点击复制后，直接粘贴给 DeepSeek, ChatGPT, Claude, 豆包等任意真实 AI 大模型，即可获得针对该股的超深度定制投研互动！</div>
       </div>
     `;
@@ -2336,7 +2867,7 @@ async function copyStockAIPrompt(winId) {
 }
 
 // 一键将股票全景数据与投研提问填入 DSH 聊天窗口或直接提问
-async function sendStockToDSHChat(symbol, name, autoSend = false) {
+async function sendStockToDSHChat(symbol, name, autoSend = false, strategy = 'general') {
   // 1. 获取最新盘口与量化分析数据
   const quote = watchlist.find(w => w.symbol.toLowerCase() === symbol.toLowerCase()) || {};
   let aiData = null;
@@ -2344,31 +2875,14 @@ async function sendStockToDSHChat(symbol, name, autoSend = false) {
     aiData = await fetchCachedAIAnalysis(symbol);
   } catch (_) {}
 
-  // 2. 构造高质量的投研提示词
-  let promptText = '';
-  if (aiData && aiData.prompt_report) {
-    promptText = aiData.prompt_report;
-  } else {
-    let newsList = [];
-    try {
-      const nData = await fetchCachedNews(symbol, name);
-      newsList = nData?.news || [];
-    } catch (_) {}
+  let newsList = [];
+  try {
+    const nData = await fetchCachedNews(symbol, name);
+    newsList = nData?.news || [];
+  } catch (_) {}
 
-    const isUp = (quote.change || 0) >= 0;
-    const sign = isUp ? '+' : '';
-    promptText = `【${name} (${symbol}) 股票实时投研诊断与交易决策咨询】
-- 最新现价: ¥${quote.current_price?.toFixed(2) || '--'} (今日涨跌: ${sign}${quote.change_pct?.toFixed(2) || '0.00'}%)
-- 今开 / 昨收: ¥${quote.open?.toFixed(2) || '--'} / ¥${quote.prev_close?.toFixed(2) || '--'}
-- 最高 / 最低: ¥${quote.high?.toFixed(2) || '--'} / ¥${quote.low?.toFixed(2) || '--'}
-- 换手率: ${quote.turnover_rate ? quote.turnover_rate.toFixed(2) + '%' : '--'}，成交额: ${quote.turnover ? '¥' + (quote.turnover / 100000000).toFixed(2) + '亿' : '--'}
-- 市盈率(PE): ${quote.pe_ratio?.toFixed(1) || '--'}，市净率(PB): ${quote.pb_ratio?.toFixed(1) || '--'}，总市值: ${quote.market_cap ? quote.market_cap.toFixed(0) + '亿' : '--'}
-${newsList.length > 0 ? `\n最新资讯动态 (附源链接):\n${newsList.slice(0, 3).map((n, i) => `${i+1}. [${n.media}] [${n.title}](${n.url})`).join('\n')}\n` : ''}
-请结合以上实时行情盘口与量化特征，深度分析：
-1. 短线走势与多空动能（阻力位、支撑位、止损位设定）；
-2. 中长线基本面估值与行业景气度评估；
-3. 具体的仓位管理与操作策略建议。`;
-  }
+  // 2. 构造高质量的策略投研提示词
+  const promptText = buildStrategyPrompt(symbol, name, aiData, quote, newsList, strategy);
 
   // 3. 寻找 DSH 页面中的主聊天输入框
   const textareas = Array.from(document.querySelectorAll('textarea:not([readonly])'));
@@ -2489,6 +3003,7 @@ async function renderChart(win) {
 
   const periodNames = {
     intraday: '分时',
+    '5day': '5日分时',
     daily: '日K',
     weekly: '周K',
     monthly: '月K',
@@ -2529,9 +3044,14 @@ async function renderChart(win) {
       return;
     }
 
-    if (win.period === 'intraday') {
+    if (win.period === 'intraday' || win.period === '5day') {
       const isIndex = win.market === 'INDEX' || win.market === 'GLOBAL' || win.symbol.toLowerCase().startsWith('sh000') || win.symbol.toLowerCase().startsWith('sz399') || win.symbol.toLowerCase().startsWith('us') || win.symbol.toLowerCase().startsWith('int_');
-      const times = bars.map(p => p.time.includes(' ') ? p.time.split(' ')[1] : p.time);
+      const times = bars.map(p => {
+        if (win.period === '5day') {
+          return p.time.length > 10 ? p.time.slice(5) : p.time;
+        }
+        return p.time.includes(' ') ? p.time.split(' ')[1] : p.time;
+      });
       const prices = bars.map(p => p.close);
       const avgPrices = bars.map(p => p.avg_price || p.close);
       const volumes = bars.map(p => p.volume);
@@ -2777,7 +3297,7 @@ async function renderChart(win) {
       });
     }
 
-    if (win.period === 'intraday') {
+    if (win.period === 'intraday' || win.period === '5day') {
       updateChartHUD(win, bars, null, bars.length - 1);
 
       win.chartInstance.off('updateAxisPointer');
@@ -2820,16 +3340,16 @@ function updateChartHUD(win, bars, ind, idx) {
   if (!hudEl || !bars || bars.length === 0 || idx < 0 || idx >= bars.length) return;
   const bar = bars[idx];
 
-  if (win.period === 'intraday') {
+  if (win.period === 'intraday' || win.period === '5day') {
     const isUp = (bar.change || (bar.close - (bars[0]?.open || bar.close))) >= 0;
     const pColor = getTrendTextClass(isUp);
-    const timeStr = bar.time.includes(' ') ? bar.time.split(' ')[1] : bar.time;
+    const timeStr = bar.time;
     const volStr = bar.volume ? (bar.volume >= 10000 ? (bar.volume / 10000).toFixed(1) + '万' : bar.volume) : '--';
     const sign = (bar.change_pct || 0) >= 0 ? '+' : '';
 
     hudEl.innerHTML = `
       <div class="flex items-center gap-3 truncate w-full">
-        <span class="opacity-70 font-semibold">⏱️ ${timeStr}</span>
+        <span class="opacity-70 font-semibold">${win.period === '5day' ? '📅' : '⏱️'} ${timeStr}</span>
         <span>现价: <b class="${pColor}">¥${bar.close.toFixed(2)}</b></span>
         <span>均价: <b class="text-amber-500 font-semibold">¥${bar.avg_price ? bar.avg_price.toFixed(2) : bar.close.toFixed(2)}</b></span>
         <span>涨跌: <b class="${pColor}">${sign}${(bar.change_pct || 0).toFixed(2)}%</b></span>
@@ -2987,7 +3507,7 @@ function toggleMaximizeWindow(id) {
   }
 }
 
-// 切换周期 (含 F10 / 资讯 / AI分析)
+// 切换周期 (含 F10 / 资讯 / AI分析 / 资金流向 / 交易笔记)
 function setWindowPeriod(id, period) {
   const win = floatingWindows.find(w => w.id === id);
   if (!win) return;
@@ -3004,6 +3524,10 @@ function setWindowPeriod(id, period) {
     renderNews(win);
   } else if (period === 'ai') {
     renderAIAnalysis(win);
+  } else if (period === 'fundflow') {
+    renderFundFlow(win);
+  } else if (period === 'notes') {
+    renderNotes(win);
   } else {
     renderChart(win);
   }
@@ -3168,6 +3692,18 @@ if (typeof window !== 'undefined') {
     closeAlertModal,
     saveAlertRule,
     deleteAlertRule,
+    openTagModal,
+    closeTagModal,
+    setStockTag,
+    setDrawerTab,
+    setSectorTab,
+    toggleExpandSector,
+    updateSectorsDOM,
+    renderFundFlow,
+    renderNotes,
+    saveStockNote,
+    setAiPromptStrategy,
+    buildStrategyPrompt,
     updateChartHUD,
     renderPortfolioSummaryCard,
     checkPriceAlerts,

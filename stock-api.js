@@ -336,6 +336,33 @@ async function searchStock(keyword) {
  * 东方财富官方高可用历史 K 线引擎 (日K 101, 周K 102, 月K 103, 5m/15m/30m/60m)
  */
 async function getEastmoneyKline(symbol, period, count = 120) {
+  if (period === '5day') {
+    const secid = getEastmoneySecId(symbol);
+    if (!secid) return [];
+    try {
+      const url = `https://push2his.eastmoney.com/api/qt/stock/trends2/get?secid=${secid}&fields1=f1,f2,f3,f4,f5,f6,f7,f8&fields2=f51,f52,f53,f54,f55,f56,f57,f58`;
+      const res = await fetchWithTimeout(url, { headers: { 'User-Agent': 'Mozilla/5.0' } }, 3500);
+      const json = await res.json();
+      const trends = json.data?.trends || [];
+      if (!Array.isArray(trends) || trends.length === 0) return [];
+      return trends.map(line => {
+        const p = line.split(',');
+        return {
+          time: p[0],
+          open: parseFloat(p[1]) || 0,
+          close: parseFloat(p[2]) || 0,
+          high: parseFloat(p[3]) || 0,
+          low: parseFloat(p[4]) || 0,
+          volume: parseFloat(p[5]) || 0,
+          turnover: parseFloat(p[6]) || 0,
+          avg_price: parseFloat(p[7]) || 0
+        };
+      });
+    } catch (_) {
+      return [];
+    }
+  }
+
   const kltMap = {
     '1m': 1,
     '5m': 5,
@@ -1206,6 +1233,125 @@ function formatQuoteMarkdown(quote) {
 | **总市值** | ${marketCapStr} | **行情时间** | \`${time}\` |`;
 }
 
+/**
+ * 获取全市场领涨行业板块与热门概念题材榜单
+ */
+async function getHotSectors() {
+  const cacheKey = 'hot_sectors';
+  const cached = serverCache.f10.get(cacheKey);
+  if (cached && (Date.now() - cached.timestamp < 15000)) {
+    return cached.data;
+  }
+  try {
+    const [indRes, conRes] = await Promise.all([
+      fetchWithTimeout('https://push2.eastmoney.com/api/qt/clist/get?pn=1&pz=15&po=1&np=1&ut=bd1d9ddb04089700cf9c27f6f7426281&fltt=2&invt=2&fid=f3&fs=m:90+t:2+f:!50&fields=f2,f3,f4,f12,f14,f104,f105,f128,f140,f136', { headers: { 'User-Agent': 'Mozilla/5.0' } }, 3500).then(r => r.json()),
+      fetchWithTimeout('https://push2.eastmoney.com/api/qt/clist/get?pn=1&pz=15&po=1&np=1&ut=bd1d9ddb04089700cf9c27f6f7426281&fltt=2&invt=2&fid=f3&fs=m:90+t:3+f:!50&fields=f2,f3,f4,f12,f14,f104,f105,f128,f140,f136', { headers: { 'User-Agent': 'Mozilla/5.0' } }, 3500).then(r => r.json())
+    ]);
+
+    const formatList = (list = []) => list.map(item => ({
+      code: item.f12,
+      name: item.f14,
+      change_pct: item.f3 || 0,
+      lead_stock_name: item.f128 || '--',
+      lead_stock_code: item.f140 || '',
+      lead_stock_pct: item.f136 || 0
+    }));
+
+    const result = {
+      industry: formatList(indRes.data?.diff || []),
+      concept: formatList(conRes.data?.diff || [])
+    };
+    serverCache.f10.set(cacheKey, { data: result, timestamp: Date.now() });
+    return result;
+  } catch (err) {
+    return { industry: [], concept: [] };
+  }
+}
+
+/**
+ * 获取指定板块内的领涨成分股
+ */
+async function getSectorStocks(sectorCode) {
+  if (!sectorCode) return [];
+  const cacheKey = `sector_stocks_${sectorCode}`;
+  const cached = serverCache.f10.get(cacheKey);
+  if (cached && (Date.now() - cached.timestamp < 15000)) {
+    return cached.data;
+  }
+  try {
+    const url = `https://push2.eastmoney.com/api/qt/clist/get?pn=1&pz=10&po=1&np=1&ut=bd1d9ddb04089700cf9c27f6f7426281&fltt=2&invt=2&fid=f3&fs=b:${sectorCode}&fields=f2,f3,f4,f12,f14,f62,f184,f66`;
+    const res = await fetchWithTimeout(url, { headers: { 'User-Agent': 'Mozilla/5.0' } }, 3500).then(r => r.json());
+    const list = (res.data?.diff || []).map(item => {
+      const c = String(item.f12);
+      const prefix = (c.startsWith('6') || c.startsWith('9')) ? 'sh' : (c.startsWith('8') || c.startsWith('4') ? 'bj' : 'sz');
+      return {
+        symbol: `${prefix}${c}`,
+        code: c,
+        name: item.f14,
+        price: item.f2 || 0,
+        change_pct: item.f3 || 0
+      };
+    });
+    serverCache.f10.set(cacheKey, { data: list, timestamp: Date.now() });
+    return list;
+  } catch (err) {
+    return [];
+  }
+}
+
+/**
+ * 获取个股主力、大单、中单、小单资金流向明细
+ */
+async function getStockFundFlow(symbol) {
+  const s = symbol.toLowerCase();
+  const secid = getEastmoneySecId(s);
+  if (!secid) return null;
+
+  const cacheKey = `fund_flow_${s}`;
+  const cached = serverCache.f10.get(cacheKey);
+  if (cached && (Date.now() - cached.timestamp < 30000)) {
+    return cached.data;
+  }
+
+  try {
+    const url = `https://push2his.eastmoney.com/api/qt/stock/fflow/kline/get?secid=${secid}&lmt=6&klt=101&fields1=f1,f2,f3,f7&fields2=f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61,f62,f63,f64,f65`;
+    const res = await fetchWithTimeout(url, { headers: { 'User-Agent': 'Mozilla/5.0' } }, 3500).then(r => r.json());
+    const klines = res.data?.klines || [];
+    if (!Array.isArray(klines) || klines.length === 0) return null;
+
+    const history = klines.map(line => {
+      const p = line.split(',');
+      return {
+        date: p[0],
+        main_inflow: parseFloat(p[1]) || 0,
+        small_inflow: parseFloat(p[2]) || 0,
+        medium_inflow: parseFloat(p[3]) || 0,
+        large_inflow: parseFloat(p[4]) || 0,
+        super_large_inflow: parseFloat(p[5]) || 0
+      };
+    });
+
+    const latest = history[history.length - 1];
+    const total = Math.abs(latest.super_large_inflow) + Math.abs(latest.large_inflow) + Math.abs(latest.medium_inflow) + Math.abs(latest.small_inflow) || 1;
+
+    const data = {
+      latest,
+      history,
+      ratios: {
+        super_large: +(Math.abs(latest.super_large_inflow) / total * 100).toFixed(1),
+        large: +(Math.abs(latest.large_inflow) / total * 100).toFixed(1),
+        medium: +(Math.abs(latest.medium_inflow) / total * 100).toFixed(1),
+        small: +(Math.abs(latest.small_inflow) / total * 100).toFixed(1)
+      }
+    };
+
+    serverCache.f10.set(cacheKey, { data, timestamp: Date.now() });
+    return data;
+  } catch (err) {
+    return null;
+  }
+}
+
 export {
   normalizeSymbol,
   getStockQuote,
@@ -1215,6 +1361,9 @@ export {
   getStockNewsAndNotices,
   generateStockAIAnalysis,
   getGlobalIndices,
+  getHotSectors,
+  getSectorStocks,
+  getStockFundFlow,
   formatQuoteMarkdown
 };
 
@@ -1227,5 +1376,8 @@ export default {
   getStockNewsAndNotices,
   generateStockAIAnalysis,
   getGlobalIndices,
+  getHotSectors,
+  getSectorStocks,
+  getStockFundFlow,
   formatQuoteMarkdown
 };

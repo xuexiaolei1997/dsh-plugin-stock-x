@@ -10,6 +10,9 @@ import {
   getStockNewsAndNotices,
   generateStockAIAnalysis,
   getGlobalIndices,
+  getHotSectors,
+  getSectorStocks,
+  getStockFundFlow,
   formatQuoteMarkdown
 } from "./stock-api.js";
 
@@ -201,7 +204,30 @@ export function apply(ctx) {
           return;
         }
 
-        // 9. 静态资源
+        // 9. 热门行业与概念板块榜单
+        if (subPath === "/sectors" || subPath === "/sectors/") {
+          const data = await getHotSectors();
+          sendJson(res, 200, { data });
+          return;
+        }
+
+        // 10. 板块成分股
+        if (subPath.startsWith("/sector-stocks")) {
+          const code = url.searchParams.get("code") || "";
+          const data = await getSectorStocks(code);
+          sendJson(res, 200, { data });
+          return;
+        }
+
+        // 11. 个股资金流向
+        if (subPath.startsWith("/fund-flow/")) {
+          const sym = subPath.replace("/fund-flow/", "");
+          const data = await getStockFundFlow(sym);
+          sendJson(res, 200, { data });
+          return;
+        }
+
+        // 12. 静态资源
         if (subPath === "/app.js") {
           const filePath = path.join(MODULE_DIR, "public", "app.js");
           if (fs.existsSync(filePath)) {
