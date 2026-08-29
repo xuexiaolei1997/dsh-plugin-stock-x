@@ -141,10 +141,27 @@ async function getStockQuote(symbolsInput) {
         const low52w = parseFloat(parts[68]) || null;
         const dividendYield = parseFloat(parts[64]) || null;
 
+        const depth = {
+          buy: [
+            { price: parseFloat(parts[9]) || 0, volume: parseInt(parts[10]) || 0 },
+            { price: parseFloat(parts[11]) || 0, volume: parseInt(parts[12]) || 0 },
+            { price: parseFloat(parts[13]) || 0, volume: parseInt(parts[14]) || 0 },
+            { price: parseFloat(parts[15]) || 0, volume: parseInt(parts[16]) || 0 },
+            { price: parseFloat(parts[17]) || 0, volume: parseInt(parts[18]) || 0 }
+          ],
+          sell: [
+            { price: parseFloat(parts[27]) || 0, volume: parseInt(parts[28]) || 0 },
+            { price: parseFloat(parts[25]) || 0, volume: parseInt(parts[26]) || 0 },
+            { price: parseFloat(parts[23]) || 0, volume: parseInt(parts[24]) || 0 },
+            { price: parseFloat(parts[21]) || 0, volume: parseInt(parts[22]) || 0 },
+            { price: parseFloat(parts[19]) || 0, volume: parseInt(parts[20]) || 0 }
+          ]
+        };
+
         let market = 'A';
         if (rawCode.startsWith('hk')) market = 'HK';
         else if (rawCode.startsWith('us')) market = 'US';
-        else if (rawCode.startsWith('sh000') || rawCode.startsWith('sz399')) market = 'INDEX';
+        else if (rawCode.startsWith('sh000') || rawCode.startsWith('sz399') || rawCode.startsWith('int_')) market = 'INDEX';
 
         const item = {
           symbol: rawCode,
@@ -179,6 +196,7 @@ async function getStockQuote(symbolsInput) {
           high_52w: high52w,
           low_52w: low52w,
           dividend_yield: dividendYield,
+          depth,
           timestamp: parts[30] || new Date().toLocaleString()
         };
 

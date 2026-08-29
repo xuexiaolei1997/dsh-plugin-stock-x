@@ -13,6 +13,60 @@ let theme = localStorage.getItem('omnistock_theme') || 'dark';
 let fontSize = localStorage.getItem('omnistock_font_size') || 'medium';
 let isDrawerOpen = false;
 
+// 全局配置与偏好持久化系统
+let appSettings = {
+  colorScheme: 'red-up',   // 'red-up' (红涨绿跌) or 'green-up' (绿涨红跌)
+  refreshInterval: 3000,   // 轮询毫秒数
+  defaultLayout: 'tile_auto',
+  activeMarketTab: 'ALL',  // 'ALL' | 'A' | 'HK' | 'US' | 'INDEX'
+  sortBy: 'default',       // 'default' | 'pct_desc' | 'pct_asc' | 'amount_desc'
+  isSettingsOpen: false
+};
+
+function loadSettings() {
+  try {
+    const raw = localStorage.getItem('omnistock_settings');
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      appSettings = { ...appSettings, ...parsed, isSettingsOpen: false };
+    }
+  } catch (_) {}
+}
+
+function saveSettings() {
+  try {
+    localStorage.setItem('omnistock_settings', JSON.stringify({
+      colorScheme: appSettings.colorScheme,
+      refreshInterval: appSettings.refreshInterval,
+      defaultLayout: appSettings.defaultLayout,
+      activeMarketTab: appSettings.activeMarketTab,
+      sortBy: appSettings.sortBy
+    }));
+  } catch (_) {}
+}
+
+loadSettings();
+
+// 统一涨跌配色计算工具
+function getTrendColor(isUp) {
+  if (appSettings.colorScheme === 'green-up') {
+    return isUp ? '#10b981' : '#ef4444';
+  }
+  return isUp ? '#ef4444' : '#10b981';
+}
+
+function getTrendTextClass(isUp) {
+  const isRedUp = appSettings.colorScheme !== 'green-up';
+  return isUp ? (isRedUp ? 'text-red-500' : 'text-emerald-500') : (isRedUp ? 'text-emerald-500' : 'text-red-500');
+}
+
+function getTrendBadgeClass(isUp) {
+  const isRedUp = appSettings.colorScheme !== 'green-up';
+  return isUp 
+    ? (isRedUp ? 'bg-red-500/10 text-red-500 border-red-500/20' : 'bg-emerald-500/10 text-emerald-500 border-emerald-500/20')
+    : (isRedUp ? 'bg-emerald-500/10 text-emerald-500 border-emerald-500/20' : 'bg-red-500/10 text-red-500 border-red-500/20');
+}
+
 // 智能内存缓存系统 (F10: 10分钟, 新闻: 2分钟, K线: 15-60秒, AI分析: 5分钟)
 const memoryCache = {
   f10: new Map(),
@@ -149,12 +203,20 @@ let savedBallPos = { ...widgetPos };
 const appRoot = document.getElementById('app-root');
 
 // 初始化
+function resetPollingTimer() {
+  if (window.__OMNISTOCK_TIMER__) {
+    clearInterval(window.__OMNISTOCK_TIMER__);
+    window.__OMNISTOCK_TIMER__ = null;
+  }
+  if (appSettings.refreshInterval > 0) {
+    window.__OMNISTOCK_TIMER__ = setInterval(refreshQuotesOnly, appSettings.refreshInterval);
+  }
+}
+
 async function initOmniStockApp() {
   applyThemeAndFont();
   await refreshData();
-  if (!window.__OMNISTOCK_TIMER__) {
-    window.__OMNISTOCK_TIMER__ = setInterval(refreshQuotesOnly, 3000);
-  }
+  resetPollingTimer();
   renderInitialApp();
 }
 
@@ -210,7 +272,7 @@ function toggleTheme() {
   localStorage.setItem('omnistock_theme', theme);
   applyThemeAndFont();
   renderInitialApp();
-  // 重新渲染所有打开窗口的内容面板（支持图表、F10、资讯、AI分析全量同步换色）
+  // 重新渲染所有打开窗口的内容面板
   floatingWindows.forEach(w => {
     if (w.period === 'f10') {
       renderF10(w);
@@ -222,6 +284,234 @@ function toggleTheme() {
       renderChart(w);
     }
   });
+}
+
+function updateSetting(key, val) {
+  appSettings[key] = val;
+  saveSettings();
+  if (key === 'refreshInterval') {
+    resetPollingTimer();
+  }
+  updateWatchlistDOM();
+  updateRibbonDOM();
+  updateOpenChartsQuotes();
+  floatingWindows.forEach(w => {
+    if (w.period !== 'f10' && w.period !== 'news' && w.period !== 'ai') {
+      renderChart(w);
+    }
+  });
+  renderInitialApp();
+}
+
+function openSettingsModal() {
+  appSettings.isSettingsOpen = true;
+  const modal = document.getElementById('omni-settings-modal');
+  if (modal) modal.classList.remove('hidden');
+  else renderInitialApp();
+}
+
+function closeSettingsModal() {
+  appSettings.isSettingsOpen = false;
+  const modal = document.getElementById('omni-settings-modal');
+  if (modal) modal.classList.add('hidden');
+}
+
+function setMarketTab(tabId) {
+  appSettings.activeMarketTab = tabId;
+  saveSettings();
+  renderInitialApp();
+}
+
+function toggleSortWatchlist() {
+  const sortCycle = ['default', 'pct_desc', 'pct_asc', 'amount_desc'];
+  const curIdx = sortCycle.indexOf(appSettings.sortBy);
+  appSettings.sortBy = sortCycle[(curIdx + 1) % sortCycle.length];
+  saveSettings();
+  renderInitialApp();
+}
+
+async function fetchCachedQuote(symbol) {
+  const key = symbol.toLowerCase();
+  try {
+    const res = await fetch(`/dsh-plugin-stock-x/quote/${symbol}`).then(r => r.json());
+    if (res.data) {
+      const q = res.data;
+      const idx = watchlist.findIndex(w => w.symbol.toLowerCase() === key);
+      if (idx !== -1) {
+        watchlist[idx] = { ...watchlist[idx], ...q };
+      } else {
+        watchlist.push(q);
+      }
+      return q;
+    }
+  } catch (_) {}
+  return null;
+}
+
+function renderDepthPanelHtml(win, quote = {}) {
+  const isDark = theme === 'dark';
+  const depth = quote.depth;
+  const isIndex = win.market === 'INDEX' || win.symbol.toLowerCase().startsWith('sh000') || win.symbol.toLowerCase().startsWith('sz399') || win.symbol.toLowerCase().startsWith('int_');
+
+  if (isIndex) {
+    return `
+      <div id="depth-panel-${win.id}" class="px-4 py-2.5 border-b text-center text-xs font-mono select-none ${
+        isDark ? 'bg-slate-950/90 border-slate-800/80 text-slate-400' : 'bg-slate-100/80 border-slate-200 text-slate-500'
+      }">
+        <span>📊 大盘指数为宏观综合指标，无买卖五档挂单撮合</span>
+      </div>
+    `;
+  }
+
+  if (!depth || (!depth.buy?.length && !depth.sell?.length)) {
+    return `
+      <div id="depth-panel-${win.id}" class="px-4 py-2.5 border-b text-center text-xs font-mono select-none ${
+        isDark ? 'bg-slate-950/90 border-slate-800/80 text-slate-400' : 'bg-slate-100/80 border-slate-200 text-slate-500'
+      }">
+        <span class="animate-pulse">⏳ 正在获取【${win.name}】实时五档买卖盘口...</span>
+      </div>
+    `;
+  }
+
+  const prevClose = quote.prev_close || quote.current_price || 0;
+
+  return `
+    <div id="depth-panel-${win.id}" class="px-4 py-2 border-b grid grid-cols-2 gap-4 text-xs font-mono select-none ${
+      isDark ? 'bg-slate-950/90 border-slate-800/80' : 'bg-slate-100/80 border-slate-200'
+    }">
+      <!-- 卖盘 (卖五 -> 卖一) -->
+      <div class="space-y-0.5">
+        <div class="text-[10px] font-bold opacity-60 mb-1 flex justify-between px-1 border-b pb-0.5 ${isDark ? 'border-slate-800' : 'border-slate-300'}">
+          <span>卖盘</span><span>挂单价</span><span>手数</span>
+        </div>
+        ${(depth.sell || []).map((s, idx) => {
+          const isUp = s.price >= prevClose;
+          const pColor = s.price > 0 ? getTrendTextClass(isUp) : 'opacity-40';
+          return `
+            <div class="flex items-center justify-between text-[11px] py-0.5 hover:bg-blue-500/10 rounded px-1">
+              <span class="opacity-60 text-[10px]">卖${5 - idx}</span>
+              <span class="font-bold ${pColor}">${s.price > 0 ? s.price.toFixed(2) : '--'}</span>
+              <span class="opacity-80">${s.volume > 0 ? (s.volume >= 10000 ? (s.volume/10000).toFixed(1)+'万' : s.volume) : '--'}</span>
+            </div>
+          `;
+        }).join('')}
+      </div>
+
+      <!-- 买盘 (买一 -> 买五) -->
+      <div class="space-y-0.5">
+        <div class="text-[10px] font-bold opacity-60 mb-1 flex justify-between px-1 border-b pb-0.5 ${isDark ? 'border-slate-800' : 'border-slate-300'}">
+          <span>买盘</span><span>挂单价</span><span>手数</span>
+        </div>
+        ${(depth.buy || []).map((b, idx) => {
+          const isUp = b.price >= prevClose;
+          const pColor = b.price > 0 ? getTrendTextClass(isUp) : 'opacity-40';
+          return `
+            <div class="flex items-center justify-between text-[11px] py-0.5 hover:bg-blue-500/10 rounded px-1">
+              <span class="opacity-60 text-[10px]">买${idx + 1}</span>
+              <span class="font-bold ${pColor}">${b.price > 0 ? b.price.toFixed(2) : '--'}</span>
+              <span class="opacity-80">${b.volume > 0 ? (b.volume >= 10000 ? (b.volume/10000).toFixed(1)+'万' : b.volume) : '--'}</span>
+            </div>
+          `;
+        }).join('')}
+      </div>
+    </div>
+  `;
+}
+
+async function toggleWindowDepth(winId) {
+  const win = floatingWindows.find(w => w.id === winId);
+  if (!win) return;
+  win.showDepth = !win.showDepth;
+
+  if (win.showDepth) {
+    fetchCachedQuote(win.symbol).then(q => {
+      if (q) {
+        const depthPanel = document.getElementById(`depth-panel-${win.id}`);
+        if (depthPanel) {
+          depthPanel.outerHTML = renderDepthPanelHtml(win, q);
+        }
+      }
+    });
+  }
+
+  const winEl = document.getElementById(win.id);
+  if (winEl) {
+    winEl.outerHTML = renderSingleWindowHtml(win);
+    bindSingleWindowEvents(win);
+    if (win.period !== 'f10' && win.period !== 'news' && win.period !== 'ai') {
+      renderChart(win);
+    }
+  }
+}
+
+// 导出自选股
+function exportWatchlist(type = 'json') {
+  if (watchlist.length === 0) {
+    showToast('⚠️ 当前自选列表为空');
+    return;
+  }
+  let text = '';
+  if (type === 'json') {
+    text = JSON.stringify(watchlist.map(w => ({ symbol: w.symbol, name: w.name, market: w.market })), null, 2);
+  } else {
+    text = watchlist.map(w => w.symbol).join(', ');
+  }
+  navigator.clipboard.writeText(text).then(() => {
+    showToast(`✅ 已复制 ${watchlist.length} 只自选股数据到剪贴板！`);
+  }).catch(() => {
+    showToast('⚠️ 复制失败，请手动复制');
+  });
+}
+
+// 批量导入自选股
+async function handleBatchImportWatchlist() {
+  const inputEl = document.getElementById('import-watchlist-text');
+  if (!inputEl) return;
+  const raw = inputEl.value.trim();
+  if (!raw) {
+    showToast('⚠️ 请输入要导入的股票代码或名称');
+    return;
+  }
+
+  let itemsToImport = [];
+  if (raw.startsWith('[') && raw.endsWith(']')) {
+    try {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        itemsToImport = parsed.map(p => p.symbol || p.code || p.name).filter(Boolean);
+      }
+    } catch (_) {}
+  }
+
+  if (itemsToImport.length === 0) {
+    itemsToImport = raw.split(/[\n,;，；\s]+/).map(s => s.trim()).filter(Boolean);
+  }
+
+  if (itemsToImport.length === 0) {
+    showToast('⚠️ 未识别到有效股票');
+    return;
+  }
+
+  showToast(`⏳ 正在批量检索并导入 ${itemsToImport.length} 只标的...`);
+  let addedCount = 0;
+
+  for (const item of itemsToImport) {
+    try {
+      const res = await fetch(`/dsh-plugin-stock-x/search?q=${encodeURIComponent(item)}`).then(r => r.json());
+      const list = res.data || [];
+      if (list.length > 0) {
+        const found = list[0];
+        await addToWatchlist(found.symbol, found.name, found.market);
+        addedCount++;
+      }
+    } catch (_) {}
+  }
+
+  inputEl.value = '';
+  closeSettingsModal();
+  await refreshData();
+  renderInitialApp();
+  showToast(`🎉 成功导入 ${addedCount} 只自选股票！`);
 }
 
 async function refreshData() {
@@ -251,6 +541,32 @@ async function refreshQuotesOnly() {
   }
 }
 
+function getFilteredAndSortedWatchlist() {
+  let list = [...watchlist];
+  
+  // 1. 市场分类过滤
+  if (appSettings.activeMarketTab === 'A') {
+    list = list.filter(item => item.market === 'A');
+  } else if (appSettings.activeMarketTab === 'HK') {
+    list = list.filter(item => item.market === 'HK');
+  } else if (appSettings.activeMarketTab === 'US') {
+    list = list.filter(item => item.market === 'US');
+  } else if (appSettings.activeMarketTab === 'INDEX') {
+    list = list.filter(item => item.market === 'INDEX' || item.market === 'GLOBAL' || (item.symbol && (item.symbol.toLowerCase().startsWith('sh000') || item.symbol.toLowerCase().startsWith('sz399') || item.symbol.toLowerCase().startsWith('int_'))));
+  }
+
+  // 2. 多维排序
+  if (appSettings.sortBy === 'pct_desc') {
+    list.sort((a, b) => (b.change_pct || 0) - (a.change_pct || 0));
+  } else if (appSettings.sortBy === 'pct_asc') {
+    list.sort((a, b) => (a.change_pct || 0) - (b.change_pct || 0));
+  } else if (appSettings.sortBy === 'amount_desc') {
+    list.sort((a, b) => (b.turnover || 0) - (a.turnover || 0));
+  }
+
+  return list;
+}
+
 function updateWatchlistDOM() {
   const container = document.getElementById('watchlist-items-container');
   if (!container) return;
@@ -261,14 +577,16 @@ function updateWatchlistDOM() {
     isDark ? 'bg-slate-900 divide-slate-800 text-slate-100' : 'bg-white divide-slate-100 text-slate-800'
   }`;
 
-  if (watchlist.length === 0) {
-    container.innerHTML = `<div class="p-8 text-center text-sm ${isDark ? 'bg-slate-900 text-slate-400' : 'bg-white text-slate-500'}">暂无自选股票，请在上方搜索添加</div>`;
+  const displayList = getFilteredAndSortedWatchlist();
+
+  if (displayList.length === 0) {
+    container.innerHTML = `<div class="p-8 text-center text-sm ${isDark ? 'bg-slate-900 text-slate-400' : 'bg-white text-slate-500'}">暂无匹配自选股票</div>`;
     return;
   }
 
-  container.innerHTML = watchlist.map(item => {
+  container.innerHTML = displayList.map(item => {
     const isUp = (item.change || 0) >= 0;
-    const color = isUp ? 'text-red-500' : 'text-emerald-500';
+    const color = getTrendTextClass(isUp);
     const sign = isUp ? '+' : '';
 
     return `
@@ -327,7 +645,7 @@ function updateRibbonDOM() {
   const displayIndices = indices.slice(0, 8);
   ribbon.innerHTML = displayIndices.map(idx => {
     const isUp = (idx.change || 0) >= 0;
-    const color = isUp ? 'text-red-500' : 'text-emerald-500';
+    const color = getTrendTextClass(isUp);
     const sign = isUp ? '+' : '';
     const shortName = idx.short_name || idx.name.replace('指数', '').replace('成指', '').slice(0, 3);
 
@@ -355,7 +673,7 @@ function updateOpenChartsQuotes() {
     const winEl = document.getElementById(win.id);
     if (!winEl) return;
     const isUp = (quote.change || 0) >= 0;
-    const color = isUp ? 'text-red-500' : 'text-emerald-500';
+    const color = getTrendTextClass(isUp);
     const sign = isUp ? '+' : '';
 
     const priceEl = winEl.querySelector('.quote-price');
@@ -368,6 +686,13 @@ function updateOpenChartsQuotes() {
       pctEl.textContent = `${sign}${quote.change_pct ? quote.change_pct.toFixed(2) : '0.00'}%`;
       pctEl.className = `quote-pct font-bold text-base ${color}`;
     }
+
+    if (win.showDepth) {
+      const depthPanel = document.getElementById(`depth-panel-${win.id}`);
+      if (depthPanel && quote.depth) {
+        depthPanel.outerHTML = renderDepthPanelHtml(win, quote);
+      }
+    }
   });
 }
 
@@ -376,8 +701,8 @@ function renderInitialApp() {
   const isDark = theme === 'dark';
   let html = '';
 
-  const w = isDrawerOpen ? 390 : 56;
-  const h = isDrawerOpen ? 530 : 56;
+  const w = isDrawerOpen ? 400 : 56;
+  const h = isDrawerOpen ? 560 : 56;
   const r = isDrawerOpen ? 22 : 28;
 
   // 1. 原地变形悬浮主体 (实底不透明，跟随主题)
@@ -420,6 +745,9 @@ function renderInitialApp() {
           </div>
 
           <div class="flex items-center gap-1.5 text-sm">
+            <button onclick="openSettingsModal()" class="p-1 rounded-lg hover:bg-slate-700 text-slate-400 hover:text-white" title="全局设置中心">
+              ⚙️
+            </button>
             <button onclick="toggleTheme()" class="p-1 rounded-lg hover:bg-slate-700 text-slate-400 hover:text-white" title="切换暗色/亮色">
               ${isDark ? '☀️' : '🌙'}
             </button>
@@ -449,6 +777,45 @@ function renderInitialApp() {
           }"></div>
         </div>
 
+        <!-- 市场分类药丸与排序栏 -->
+        <div class="px-3 py-1.5 border-b flex items-center justify-between gap-1 text-[11px] ${
+          isDark ? 'bg-slate-900 border-slate-800' : 'bg-slate-50 border-slate-200'
+        }">
+          <div class="flex items-center gap-1">
+            ${[
+              { id: 'ALL', label: '全部' },
+              { id: 'A', label: 'A股' },
+              { id: 'HK', label: '港股' },
+              { id: 'US', label: '美股' },
+              { id: 'INDEX', label: '指数' }
+            ].map(tab => `
+              <button onclick="setMarketTab('${tab.id}')"
+                class="px-2 py-0.5 rounded-md font-semibold transition-all ${
+                  appSettings.activeMarketTab === tab.id
+                    ? 'bg-blue-600 text-white shadow-sm'
+                    : (isDark ? 'text-slate-400 hover:text-slate-200 hover:bg-slate-800' : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200')
+                }">
+                ${tab.label}
+              </button>
+            `).join('')}
+          </div>
+
+          <div class="flex items-center gap-1">
+            <button onclick="toggleSortWatchlist()"
+              class="px-2 py-0.5 rounded-md font-semibold flex items-center gap-1 border transition-all ${
+                appSettings.sortBy !== 'default'
+                  ? 'bg-indigo-600/15 text-indigo-400 border-indigo-500/30 font-bold'
+                  : (isDark ? 'bg-slate-800/80 text-slate-400 border-slate-700 hover:text-slate-200' : 'bg-white text-slate-600 border-slate-300 hover:text-slate-900')
+              }">
+              <span>${
+                appSettings.sortBy === 'pct_desc' ? '涨幅 ⬇' :
+                appSettings.sortBy === 'pct_asc' ? '跌幅 ⬆' :
+                appSettings.sortBy === 'amount_desc' ? '成交额 💰' : '默认排序'
+              }</span>
+            </button>
+          </div>
+        </div>
+
         <!-- 自选股票列表 (实色底色，不透明) -->
         <div id="watchlist-items-container" class="flex-1 overflow-y-auto divide-y max-h-[300px] ${
           isDark ? 'bg-slate-900 divide-slate-800' : 'bg-white divide-slate-100'
@@ -464,7 +831,111 @@ function renderInitialApp() {
     </div>
   `;
 
-  // 2. 走势图窗口容器
+  // 2. 全局设置中心模态框
+  html += `
+    <div id="omni-settings-modal" class="${appSettings.isSettingsOpen ? '' : 'hidden'} fixed inset-0 z-[999999] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+      <div class="w-full max-w-lg rounded-2xl border shadow-2xl overflow-hidden flex flex-col max-h-[85vh] ${
+        isDark ? 'bg-slate-900 border-slate-700 text-slate-100' : 'bg-white border-slate-300 text-slate-800'
+      }">
+        <div class="px-5 py-3.5 border-b flex items-center justify-between ${isDark ? 'bg-slate-800/80 border-slate-700' : 'bg-slate-100 border-slate-200'}">
+          <div class="flex items-center gap-2 font-bold text-base">
+            <span>⚙️ 全局偏好与设置中心</span>
+          </div>
+          <button onclick="closeSettingsModal()" class="p-1 rounded-lg hover:bg-red-500/20 text-slate-400 hover:text-red-500 font-bold">✕</button>
+        </div>
+
+        <div class="p-5 overflow-y-auto space-y-5 text-xs">
+          <!-- 1. 涨跌配色习惯 -->
+          <div class="space-y-2">
+            <label class="font-bold text-sm text-blue-500 block">🎨 涨跌配色习惯</label>
+            <div class="grid grid-cols-2 gap-3">
+              <div onclick="updateSetting('colorScheme', 'red-up')" class="p-3 rounded-xl border cursor-pointer flex items-center justify-between transition-all ${
+                appSettings.colorScheme === 'red-up' ? 'border-blue-500 bg-blue-500/10 font-bold ring-1 ring-blue-500' : (isDark ? 'border-slate-800 bg-slate-950/40 hover:border-slate-700' : 'border-slate-200 bg-slate-50')
+              }">
+                <div class="flex items-center gap-2">
+                  <span class="text-sm">🇨🇳</span>
+                  <div>
+                    <div class="font-bold">红涨绿跌</div>
+                    <div class="text-[11px] opacity-60">中国 A股 / 港股惯例</div>
+                  </div>
+                </div>
+                <span class="text-red-500 font-bold">+3.8%</span>
+              </div>
+
+              <div onclick="updateSetting('colorScheme', 'green-up')" class="p-3 rounded-xl border cursor-pointer flex items-center justify-between transition-all ${
+                appSettings.colorScheme === 'green-up' ? 'border-blue-500 bg-blue-500/10 font-bold ring-1 ring-blue-500' : (isDark ? 'border-slate-800 bg-slate-950/40 hover:border-slate-700' : 'border-slate-200 bg-slate-50')
+              }">
+                <div class="flex items-center gap-2">
+                  <span class="text-sm">🌐</span>
+                  <div>
+                    <div class="font-bold">绿涨红跌</div>
+                    <div class="text-[11px] opacity-60">美股 / 国际金融惯例</div>
+                  </div>
+                </div>
+                <span class="text-emerald-500 font-bold">+3.8%</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- 2. 行情刷新频率 -->
+          <div class="space-y-2">
+            <label class="font-bold text-sm text-blue-500 block">⏱️ 行情自动刷新频率</label>
+            <div class="grid grid-cols-4 gap-2">
+              ${[
+                { val: 2000, label: '2秒 (极速)' },
+                { val: 3000, label: '3秒 (标准)' },
+                { val: 5000, label: '5秒 (省流)' },
+                { val: 10000, label: '10秒' }
+              ].map(opt => `
+                <button onclick="updateSetting('refreshInterval', ${opt.val})" class="py-2 rounded-xl border text-center font-semibold transition-all ${
+                  appSettings.refreshInterval === opt.val
+                    ? 'bg-blue-600 text-white border-blue-500 shadow-sm'
+                    : (isDark ? 'bg-slate-950/40 border-slate-800 text-slate-300 hover:border-slate-700' : 'bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100')
+                }">${opt.label}</button>
+              `).join('')}
+            </div>
+          </div>
+
+          <!-- 3. 自选股批量导入与备份 -->
+          <div class="space-y-2">
+            <label class="font-bold text-sm text-purple-400 block">📦 自选股备份与批量导入</label>
+            <div class="p-3.5 rounded-xl border space-y-3 ${isDark ? 'bg-slate-950/60 border-slate-800' : 'bg-slate-50 border-slate-200'}">
+              <div>
+                <span class="block font-semibold mb-1">批量导入股票代码或名称:</span>
+                <textarea id="import-watchlist-text" placeholder="支持输入任意逗号或换行分隔的代码或名称，例如：&#10;600519, 00700, NVDA, 宁德时代, 比亚迪" class="w-full h-16 p-2 rounded-lg border font-mono text-xs focus:outline-none focus:border-blue-500 ${isDark ? 'bg-slate-900 border-slate-700 text-slate-200' : 'bg-white border-slate-300 text-slate-800'}"></textarea>
+                <div class="flex justify-between items-center mt-2">
+                  <span class="text-[11px] opacity-60">自动智能识别并全市场检索</span>
+                  <button onclick="handleBatchImportWatchlist()" class="px-3 py-1 rounded-lg bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs shadow-sm">
+                    📥 一键批量导入
+                  </button>
+                </div>
+              </div>
+
+              <div class="border-t pt-2.5 flex items-center justify-between ${isDark ? 'border-slate-800' : 'border-slate-200'}">
+                <span class="text-[11px] opacity-70">导出当前 ${watchlist.length} 只自选:</span>
+                <div class="flex items-center gap-2">
+                  <button onclick="exportWatchlist('json')" class="px-2.5 py-1 rounded-lg border text-xs font-semibold ${isDark ? 'bg-slate-800 border-slate-700 hover:text-white' : 'bg-white border-slate-300 hover:bg-slate-100'}">
+                    📋 复制 JSON
+                  </button>
+                  <button onclick="exportWatchlist('text')" class="px-2.5 py-1 rounded-lg border text-xs font-semibold ${isDark ? 'bg-slate-800 border-slate-700 hover:text-white' : 'bg-white border-slate-300 hover:bg-slate-100'}">
+                    📄 复制纯代码
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="px-5 py-3 border-t flex justify-end ${isDark ? 'bg-slate-800/80 border-slate-700' : 'bg-slate-100 border-slate-200'}">
+          <button onclick="closeSettingsModal()" class="px-5 py-1.5 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs shadow-md">
+            完成
+          </button>
+        </div>
+      </div>
+    </div>
+  `;
+
+  // 3. 走势图窗口容器
   html += `<div id="floating-windows-container">`;
   floatingWindows.forEach(win => {
     html += renderSingleWindowHtml(win);
@@ -532,11 +1003,12 @@ function updateFooterManager() {
   if (el) el.innerHTML = renderFooterManagerHtml();
 }
 
-// 渲染单个窗口 HTML (含 AI 分析顶栏按钮与专属面板)
+// 渲染单个窗口 HTML (含 AI 分析顶栏按钮、五档深度与专属面板)
 function renderSingleWindowHtml(win) {
   const isDark = theme === 'dark';
   const quote = watchlist.find(w => w.symbol.toLowerCase() === win.symbol.toLowerCase()) || {};
   const isUp = (quote.change || 0) >= 0;
+  const color = getTrendTextClass(isUp);
   const sign = isUp ? '+' : '';
 
   if (win.isMinimized) {
@@ -546,7 +1018,7 @@ function renderSingleWindowHtml(win) {
           isDark ? 'bg-slate-900/95 border-slate-700 text-slate-100' : 'bg-white/95 border-slate-300 text-slate-800'
         }">
         <span class="text-blue-500 font-bold text-sm">📊 ${win.name}</span>
-        <span class="font-mono text-sm font-bold ${isUp ? 'text-red-500' : 'text-emerald-500'}">
+        <span class="font-mono text-sm font-bold ${color}">
           ${quote.current_price ? quote.current_price.toFixed(2) : '--'} (${sign}${quote.change_pct ? quote.change_pct.toFixed(2) : '0.00'}%)
         </span>
         <button onclick="toggleMinimizeWindow('${win.id}')" class="p-1.5 rounded bg-blue-600/20 text-blue-400 hover:bg-blue-600 hover:text-white">⌃</button>
@@ -602,10 +1074,10 @@ function renderSingleWindowHtml(win) {
       <div class="px-4 py-2.5 border-b grid grid-cols-4 gap-x-3 gap-y-2 font-mono ${
         isDark ? 'bg-slate-950/70 border-slate-800/80 text-slate-300' : 'bg-slate-50 border-slate-200 text-slate-700'
       }">
-        <div><span class="text-xs block opacity-60 mb-0.5">最新现价</span><span class="quote-price font-bold text-base ${isUp ? 'text-red-500' : 'text-emerald-500'}">${quote.current_price?.toFixed(2) || '--'}</span></div>
-        <div><span class="text-xs block opacity-60 mb-0.5">今日涨跌</span><span class="quote-pct font-bold text-base ${isUp ? 'text-red-500' : 'text-emerald-500'}">${sign}${quote.change_pct ? quote.change_pct.toFixed(2) : '0.00'}%</span></div>
+        <div><span class="text-xs block opacity-60 mb-0.5">最新现价</span><span class="quote-price font-bold text-base ${color}">${quote.current_price?.toFixed(2) || '--'}</span></div>
+        <div><span class="text-xs block opacity-60 mb-0.5">今日涨跌</span><span class="quote-pct font-bold text-base ${color}">${sign}${quote.change_pct ? quote.change_pct.toFixed(2) : '0.00'}%</span></div>
         <div><span class="text-xs block opacity-60 mb-0.5">今开 / 昨收</span><span class="text-sm font-semibold">${quote.open?.toFixed(2) || '--'} / ${quote.prev_close?.toFixed(2) || '--'}</span></div>
-        <div><span class="text-xs block opacity-60 mb-0.5">最高 / 最低</span><span class="text-sm font-semibold text-red-500">${quote.high?.toFixed(2) || '--'}</span> / <span class="text-sm font-semibold text-emerald-500">${quote.low?.toFixed(2) || '--'}</span></div>
+        <div><span class="text-xs block opacity-60 mb-0.5">最高 / 最低</span><span class="text-sm font-semibold ${getTrendTextClass(true)}">${quote.high?.toFixed(2) || '--'}</span> / <span class="text-sm font-semibold ${getTrendTextClass(false)}">${quote.low?.toFixed(2) || '--'}</span></div>
         
         <div><span class="text-xs block opacity-60 mb-0.5">换手率</span><span class="text-sm font-bold text-amber-500">${quote.turnover_rate ? quote.turnover_rate.toFixed(2) + '%' : '--'}</span></div>
         <div><span class="text-xs block opacity-60 mb-0.5">日内振幅</span><span class="text-sm font-semibold">${quote.amplitude ? quote.amplitude.toFixed(2) + '%' : '--'}</span></div>
@@ -614,11 +1086,14 @@ function renderSingleWindowHtml(win) {
 
         <div><span class="text-xs block opacity-60 mb-0.5">市盈率(PE) / PB</span><span class="text-sm font-semibold">${quote.pe_ratio?.toFixed(1) || '--'} / ${quote.pb_ratio?.toFixed(1) || '--'}</span></div>
         <div><span class="text-xs block opacity-60 mb-0.5">流通 / 总市值</span><span class="text-sm font-semibold">${quote.float_market_cap ? quote.float_market_cap.toFixed(0)+'亿' : '--'} / ${quote.market_cap ? quote.market_cap.toFixed(0)+'亿' : '--'}</span></div>
-        <div><span class="text-xs block opacity-60 mb-0.5">涨停 / 跌停价</span><span class="text-sm font-semibold text-red-500">${quote.limit_up?.toFixed(2) || '--'}</span> / <span class="text-sm font-semibold text-emerald-500">${quote.limit_down?.toFixed(2) || '--'}</span></div>
+        <div><span class="text-xs block opacity-60 mb-0.5">涨停 / 跌停价</span><span class="text-sm font-semibold ${getTrendTextClass(true)}">${quote.limit_up?.toFixed(2) || '--'}</span> / <span class="text-sm font-semibold ${getTrendTextClass(false)}">${quote.limit_down?.toFixed(2) || '--'}</span></div>
         <div><span class="text-xs block opacity-60 mb-0.5">股息率</span><span class="text-sm font-semibold text-blue-400">${quote.dividend_yield ? quote.dividend_yield.toFixed(2)+'%' : '--'}</span></div>
       </div>
 
-      <!-- 周期与看板控制栏 (含 AI 分析选项卡) -->
+      <!-- 五档买卖挂单深度盘口 (可一键展开/收起) -->
+      ${win.showDepth ? renderDepthPanelHtml(win, quote) : ''}
+
+      <!-- 周期与看板控制栏 (含 AI 分析与五档盘口选项卡) -->
       <div id="controls-bar-${win.id}" class="px-4 py-2.5 border-b flex flex-wrap items-center justify-between gap-2.5 text-xs ${
         isDark ? 'bg-slate-900/90 border-slate-800' : 'bg-white border-slate-200'
       }">
@@ -679,10 +1154,15 @@ function renderWindowControlsHtml(win) {
         ` : `<div></div>`)}
       </div>
 
-      <!-- 第二行：F10档案、资讯公告、AI深度分析 -->
+      <!-- 第二行：F10档案、资讯公告、五档盘口与AI深度分析 -->
       <div class="flex flex-wrap items-center justify-between gap-2 pt-2 border-t ${isDark ? 'border-slate-800/80' : 'border-slate-200/80'}">
         <div class="flex items-center gap-2">
           <span class="text-xs font-semibold text-purple-400 mr-0.5">深度投研:</span>
+          <button onclick="toggleWindowDepth('${win.id}')" class="px-2.5 py-1 rounded-lg text-xs font-semibold transition-all flex items-center gap-1 ${
+            win.showDepth ? 'bg-indigo-600 text-white shadow-sm font-bold' : (isDark ? 'bg-slate-800/80 text-slate-300 hover:text-white hover:bg-slate-700' : 'bg-slate-100 text-slate-700 hover:bg-slate-200')
+          }" title="展开/收起五档买卖深度挂单盘口">
+            <span>📊 五档盘口</span>
+          </button>
           <button onclick="setWindowPeriod('${win.id}', 'f10')" class="px-3 py-1 rounded-lg text-xs font-semibold transition-all flex items-center gap-1 ${
             win.period === 'f10' ? 'bg-blue-600 text-white shadow-sm font-bold' : (isDark ? 'bg-slate-800/80 text-slate-300 hover:text-white hover:bg-slate-700' : 'bg-slate-100 text-slate-700 hover:bg-slate-200')
           }">
@@ -1760,13 +2240,16 @@ async function renderChart(win) {
         });
       }
 
+      const upColor = getTrendColor(true);
+      const downColor = getTrendColor(false);
+
       const seriesList = [
         {
           name: 'K线', 
           type: 'candlestick', 
           data: ind.kValues, 
           gridIndex: 0,
-          itemStyle: { color: '#ef4444', color0: '#10b981', borderColor: '#ef4444', borderColor0: '#10b981' }
+          itemStyle: { color: upColor, color0: downColor, borderColor: upColor, borderColor0: downColor }
         }
       ];
 
@@ -1783,7 +2266,7 @@ async function renderChart(win) {
         seriesList.push(
           { name: 'UP', type: 'line', data: ind.bollUpper, smooth: true, showSymbol: false, lineStyle: { color: '#f59e0b', width: 1.6 } },
           { name: 'MID', type: 'line', data: ind.bollMid, smooth: true, showSymbol: false, lineStyle: { color: '#3b82f6', width: 1.6 } },
-          { name: 'DN', type: 'line', data: ind.bollLower, smooth: true, showSymbol: false, lineStyle: { color: '#10b981', width: 1.6 } }
+          { name: 'DN', type: 'line', data: ind.bollLower, smooth: true, showSymbol: false, lineStyle: { color: '#06b6d4', width: 1.6 } }
         );
       }
       if (win.mainIndicators.includes('EMA')) {
@@ -1804,7 +2287,7 @@ async function renderChart(win) {
           );
         } else if (sub === 'MACD') {
           seriesList.push(
-            { name: 'MACD', type: 'bar', xAxisIndex: gIdx, yAxisIndex: gIdx, data: ind.macdBar.map(v => ({ value: v, itemStyle: { color: v >= 0 ? '#ef4444' : '#10b981' } })) },
+            { name: 'MACD', type: 'bar', xAxisIndex: gIdx, yAxisIndex: gIdx, data: ind.macdBar.map(v => ({ value: v, itemStyle: { color: v >= 0 ? upColor : downColor } })) },
             { name: 'DIF', type: 'line', xAxisIndex: gIdx, yAxisIndex: gIdx, data: ind.dif, smooth: true, showSymbol: false, lineStyle: { color: '#f59e0b', width: 1.6 } },
             { name: 'DEA', type: 'line', xAxisIndex: gIdx, yAxisIndex: gIdx, data: ind.dea, smooth: true, showSymbol: false, lineStyle: { color: '#3b82f6', width: 1.6 } }
           );
@@ -2113,11 +2596,28 @@ if (typeof window !== 'undefined') {
     fetchCachedNews,
     fetchCachedKline,
     fetchCachedAIAnalysis,
+    fetchCachedQuote,
+    renderDepthPanelHtml,
     initOmniStockApp,
     applyThemeAndFont,
     toggleTheme,
     refreshData,
     refreshQuotesOnly,
+    resetPollingTimer,
+    loadSettings,
+    saveSettings,
+    updateSetting,
+    openSettingsModal,
+    closeSettingsModal,
+    setMarketTab,
+    toggleSortWatchlist,
+    toggleWindowDepth,
+    exportWatchlist,
+    handleBatchImportWatchlist,
+    getFilteredAndSortedWatchlist,
+    getTrendColor,
+    getTrendTextClass,
+    getTrendBadgeClass,
     updateWatchlistDOM,
     updateRibbonDOM,
     updateOpenChartsQuotes,
